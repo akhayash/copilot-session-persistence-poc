@@ -3,6 +3,7 @@ import { apiRequest } from './api'
 
 type SessionFsEntry = {
   path: string
+  pathCategory: 'canonical-session-state' | 'host-shaped-virtual-key' | 'virtual'
   kind: 'file' | 'directory'
   sizeBytes: number
   birthTime: string
@@ -59,6 +60,25 @@ function formatBytes(value: number) {
 function pathDepth(path: string) {
   return Math.max(0, path.split('/').filter(Boolean).length - 1)
 }
+
+const pathGroups = [
+  {
+    category: 'canonical-session-state',
+    title: 'Canonical SessionFS',
+    description: 'Configured /session-state namespace. Every item below is a SQLite row.',
+  },
+  {
+    category: 'host-shaped-virtual-key',
+    title: 'Host-shaped virtual keys',
+    description:
+      'Windows-shaped strings supplied by the SDK. They remain SQLite keys and are not proof of disk files.',
+  },
+  {
+    category: 'virtual',
+    title: 'Other virtual keys',
+    description: 'Additional paths handled by the custom SessionFS provider.',
+  },
+] as const
 
 export default function SessionInspector({
   sessionId,
@@ -192,13 +212,26 @@ export default function SessionInspector({
                 </dd>
               </div>
               <div>
-                <dt>Host session path checked</dt>
-                <dd>{snapshot.storage.hostSessionDirectory}</dd>
+                <dt>Disk leak check</dt>
+                <dd>
+                  <strong className="not-storage-label">Not a storage location</strong>
+                  Default CLI path tested only to prove absence:
+                  <br />
+                  {snapshot.storage.hostSessionDirectory}
+                </dd>
               </div>
               <div>
-                <dt>Individual session files</dt>
-                <dd>
-                  {snapshot.storage.individualSessionFilesDetected ? 'Detected' : 'Not found'}
+                <dt>Disk check result</dt>
+                <dd
+                  className={
+                    snapshot.storage.individualSessionFilesDetected
+                      ? 'disk-result detected'
+                      : 'disk-result absent'
+                  }
+                >
+                  {snapshot.storage.individualSessionFilesDetected
+                    ? 'Individual files detected'
+                    : 'NOT PRESENT — content remains in SQLite rows'}
                 </dd>
               </div>
             </dl>
@@ -235,22 +268,44 @@ export default function SessionInspector({
             {snapshot.entries.length === 0 ? (
               <p className="inspector-empty">No SessionFS rows yet. Send the first message.</p>
             ) : (
-              <div className="fs-tree">
-                {snapshot.entries.map((entry) => (
-                  <button
-                    type="button"
-                    key={entry.path}
-                    className={selected?.entry.path === entry.path ? 'selected' : ''}
-                    style={{ paddingLeft: `${12 + pathDepth(entry.path) * 14}px` }}
-                    onClick={() => selectEntry(entry)}
-                  >
-                    <span className="entry-kind">{entry.kind === 'file' ? 'F' : 'D'}</span>
-                    <span className="entry-path">{entry.path}</span>
-                    {entry.kind === 'file' && (
-                      <span className="entry-size">{formatBytes(entry.sizeBytes)}</span>
-                    )}
-                  </button>
-                ))}
+              <div className="fs-groups">
+                {pathGroups.map((group) => {
+                  const entries = snapshot.entries.filter(
+                    (entry) => entry.pathCategory === group.category,
+                  )
+                  if (entries.length === 0) return null
+
+                  return (
+                    <div className="fs-group" key={group.category}>
+                      <div className="fs-group-header">
+                        <div>
+                          <strong>{group.title}</strong>
+                          <span>{group.description}</span>
+                        </div>
+                        <span className="sqlite-row-badge">{entries.length} SQLite rows</span>
+                      </div>
+                      <div className="fs-tree">
+                        {entries.map((entry) => (
+                          <button
+                            type="button"
+                            key={entry.path}
+                            className={selected?.entry.path === entry.path ? 'selected' : ''}
+                            style={{ paddingLeft: `${12 + pathDepth(entry.path) * 14}px` }}
+                            onClick={() => selectEntry(entry)}
+                          >
+                            <span className="entry-kind">
+                              {entry.kind === 'file' ? 'F' : 'D'}
+                            </span>
+                            <span className="entry-path">{entry.path}</span>
+                            {entry.kind === 'file' && (
+                              <span className="entry-size">{formatBytes(entry.sizeBytes)}</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </section>
@@ -269,6 +324,14 @@ export default function SessionInspector({
                     session_id={selected.sessionKey}
                     <br />
                     path={selected.pathKey}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Path origin</dt>
+                  <dd>
+                    {selected.entry.pathCategory === 'host-shaped-virtual-key'
+                      ? 'Host-shaped virtual key — stored in SQLite, not resolved by this UI'
+                      : selected.entry.pathCategory}
                   </dd>
                 </div>
                 <div>

@@ -40,6 +40,9 @@ public sealed class SqliteSessionFsDiagnosticsReaderTests : IDisposable
         Assert.False(snapshot.Storage.IndividualSessionFilesDetected);
         Assert.Equal(2, snapshot.EventCount);
         Assert.Equal(3, snapshot.NodeCount);
+        Assert.All(
+            snapshot.Entries,
+            entry => Assert.Equal("canonical-session-state", entry.PathCategory));
         Assert.NotNull(details);
         Assert.True(details.ContentTruncated);
         Assert.DoesNotContain("ghp_1234567890", details.Content, StringComparison.Ordinal);

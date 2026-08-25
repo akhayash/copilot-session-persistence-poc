@@ -164,11 +164,32 @@ public sealed class SqliteSessionFsDiagnosticsReader(
 
     private static SessionFsEntryInfo ReadEntry(SqliteDataReader reader) => new(
         reader.GetString(0),
+        ClassifyPath(reader.GetString(0)),
         reader.GetString(1),
         reader.GetInt64(2),
         ParseTimestamp(reader.GetString(3)),
         ParseTimestamp(reader.GetString(4)),
         reader.GetInt64(5));
+
+    private static string ClassifyPath(string path)
+    {
+        if (path.Equals("/session-state", StringComparison.Ordinal)
+            || path.StartsWith("/session-state/", StringComparison.Ordinal))
+        {
+            return "canonical-session-state";
+        }
+
+        if (path.Length >= 4
+            && path[0] == '/'
+            && char.IsAsciiLetter(path[1])
+            && path[2] == ':'
+            && path[3] == '/')
+        {
+            return "host-shaped-virtual-key";
+        }
+
+        return "virtual";
+    }
 
     private static DateTimeOffset ParseTimestamp(string value) =>
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);

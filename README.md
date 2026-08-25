@@ -170,6 +170,7 @@ virtual files と実際の保存先を read-only で確認できます。
 - `session_fs_nodes` の row、file、directory、content byte 数
 - `/session-state/events.jsonl` の event 数
 - Virtual path、size、timestamp、version
+- Canonical `/session-state` と Windows host path 風の virtual key の分類
 - 選択した row の content preview と SQLite primary key
 - SQLite database file の実 path と size
 - 対応する `~/.copilot/session-state/{sessionId}` の存在確認
@@ -177,6 +178,11 @@ virtual files と実際の保存先を read-only で確認できます。
 SQLite database file 自体は host filesystem 上に存在しますが、Inspector は
 `events.jsonl`、`workspace.yaml`、checkpoint などが個別の host file ではなく
 `session_fs_nodes` の row/content として保存されていることを evidence とともに表示します。
+`/C:/Users/...` のような key は **Host-shaped virtual keys** として分離表示し、
+実 file path ではなく SQLite の `path` value であることを明示します。
+`~/.copilot/session-state/{sessionId}` は保存先として表示するものではなく、
+通常の CLI file storage に session data が漏れていないことを確認するための
+**Disk leak check** の比較対象です。
 任意 SQL は実行できず、content preview は最大 65,536 characters に制限され、既知の
 GitHub/Bearer token pattern は redact されます。
 

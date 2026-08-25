@@ -2,6 +2,7 @@ namespace CopilotSessionPersistencePoc.Diagnostics;
 
 public sealed record SessionFsEntryInfo(
     string Path,
+    string PathCategory,
     string Kind,
     long SizeBytes,
     DateTimeOffset BirthTime,
