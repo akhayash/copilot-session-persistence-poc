@@ -103,6 +103,7 @@ data/
 node_modules/
 ClientApp/dist/
 ClientApp/.vite/
+src/CopilotSessionPersistencePoc/wwwroot/
 
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt

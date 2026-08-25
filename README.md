@@ -72,8 +72,8 @@ static files として配信します。
   - Current: SQLite-backed SessionFS
   - Future: Azure Blob Storage、Azure Cosmos DB-backed SessionFS
 - `ICopilotClientFactory`
-  - Current: local auto-managed Copilot CLI
-  - Future: external headless Copilot CLI
+  - Current: external local headless Copilot CLI
+  - Future: hosted runtime connection
 
 同じ SQLite file を使っても、application state と agent state は table と
 access layer を分離します。
@@ -82,9 +82,10 @@ access layer を分離します。
 
 この PoC では GitHub OAuth UI や token database を作りません。
 
-既定では、developer が sign in 済みの GitHub Copilot CLI credential を
-backend process から利用します。明示的な token が必要な場合は
-`COPILOT_GITHUB_TOKEN` environment variable を使います。
+既定では、sign in 済みの GitHub Copilot CLI を headless server として起動し、
+ASP.NET Core は `localhost:4321` へ接続します。外部 runtime への接続では、
+authentication は headless CLI process が管理します。必要であれば CLI 起動前に
+`COPILOT_GITHUB_TOKEN`、`GH_TOKEN`、または `GITHUB_TOKEN` を設定してください。
 
 Credential は次の場所へ保存しません。
 
@@ -93,6 +94,73 @@ Credential は次の場所へ保存しません。
 - `appsettings.json`
 - Git history
 - Application log
+
+## Prerequisites
+
+- .NET SDK 10
+- Node.js 24 以降と npm
+- GitHub Copilot CLI
+- GitHub Copilot subscription を利用できる GitHub account
+
+最初に CLI の対話 mode を起動し、`/login` で sign in 済みであることを確認します。
+
+## Run locally
+
+初回だけ frontend dependencies を復元して build します。
+
+```powershell
+cd src\CopilotSessionPersistencePoc\ClientApp
+npm ci
+npm run build
+cd ..\..\..
+```
+
+推奨構成では、推測困難な connection token を 2 つの terminal へ同じ値で設定します。
+次の例では説明のため固定文字列を使っていますが、実際には password manager などで
+生成した random value を使ってください。
+
+Terminal 1:
+
+```powershell
+$env:COPILOT_CONNECTION_TOKEN = "<random-local-token>"
+copilot --headless --port 4321
+```
+
+Terminal 2:
+
+```powershell
+$env:COPILOT_CONNECTION_TOKEN = "<random-local-token>"
+$env:ASPNETCORE_URLS = "http://localhost:5080"
+dotnet run --project src\CopilotSessionPersistencePoc
+```
+
+Browser で `http://localhost:5080` を開きます。local SQLite database は
+`src\CopilotSessionPersistencePoc\data\copilot-sessions.db` に作成されます。
+この directory と WAL/SHM files は Git 対象外です。
+
+Frontend HMR を使う場合は backend と headless CLI に加えて次を実行し、
+Vite が表示する URL を開きます。`/api` は port 5080 へ proxy されます。
+
+```powershell
+cd src\CopilotSessionPersistencePoc\ClientApp
+npm run dev
+```
+
+## Test
+
+```powershell
+dotnet test CopilotSessionPersistencePoc.slnx
+
+cd src\CopilotSessionPersistencePoc\ClientApp
+npm run lint
+npm run build
+```
+
+通常の tests は real Copilot service を呼びません。認証を伴う restart verification
+は local-only です。実際の検証では 2 messages 後に Web と headless CLI の両 process
+を停止し、同じ SQLite file で再起動しました。再起動前の 4 messages を読み込んだ後、
+以前記憶させた marker を follow-up で回答し、history が 6 events へ更新されることを
+確認しています。
 
 ## Scope
 
@@ -115,10 +183,15 @@ Credential は次の場所へ保存しません。
 - Distributed lock と multi-instance scaling
 - Production retention、backup、encryption policy
 
-## Project status
+## Security and local-only limitations
 
-現在は architecture 定義の段階です。Application code と local 実行 command は、
-設計に沿って次の step で追加します。
+- `CopilotClientMode.Empty` と空の `AvailableTools` を使い、host filesystem、network、
+  shell tool を agent に公開しません。
+- `COPILOT_CONNECTION_TOKEN` を設定しない場合、headless CLI は local client connection
+  を認証しません。
+- API に user authorization はありません。trusted local development machine 専用です。
+- Lock は process 内だけです。複数 Web instance から同じ session を同時利用できません。
+- SQLite file の backup、encryption、retention は実装していません。
 
 ## References
 

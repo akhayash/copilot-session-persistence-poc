@@ -278,7 +278,7 @@ builder.Services.AddScoped<CopilotSessionService>();
 | --- | --- | --- |
 | `IAppSessionRepository` | SQLite | SQL Server、Azure Cosmos DB |
 | `ISessionFsProviderFactory` | SQLite | Azure Blob Storage、Azure Cosmos DB |
-| `ICopilotClientFactory` | Auto-managed local CLI | External headless CLI |
+| `ICopilotClientFactory` | External local headless CLI | Hosted runtime connection |
 
 Backend 固有 query や client type を `CopilotSessionService` と API contract へ漏らしません。
 
@@ -312,7 +312,9 @@ Persistence failure を成功 response に変換しません。
 2. Optional `COPILOT_GITHUB_TOKEN`
 3. `GH_TOKEN` / `GITHUB_TOKEN` fallback
 
-`CopilotClientOptions.UseLoggedInUser` を local default とします。
+Headless CLI process が authentication を管理し、ASP.NET Core は
+`RuntimeConnection.ForUri` で接続します。`COPILOT_CONNECTION_TOKEN` が設定されている
+場合は同じ値を両 process で使用し、local runtime connection を認証します。
 
 ### Rules
 
@@ -390,4 +392,3 @@ Not included:
 - OAuth / multi-user authorization
 - Distributed lock
 - Production backup、retention、encryption
-
