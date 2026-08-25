@@ -14,14 +14,17 @@ internal sealed class TestSqliteConnectionFactory : ISqliteConnectionFactory, ID
             Path.GetTempPath(),
             $"copilot-session-persistence-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directoryPath);
+        DatabasePath = Path.Combine(directoryPath, "test.db");
         connectionString = new SqliteConnectionStringBuilder
         {
-            DataSource = Path.Combine(directoryPath, "test.db"),
+            DataSource = DatabasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared,
             Pooling = false,
         }.ToString();
     }
+
+    public string DatabasePath { get; }
 
     public async Task<SqliteConnection> OpenConnectionAsync(
         CancellationToken cancellationToken = default)

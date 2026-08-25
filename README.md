@@ -130,16 +130,16 @@ Terminal 2:
 
 ```powershell
 $env:COPILOT_CONNECTION_TOKEN = "<random-local-token>"
-$env:ASPNETCORE_URLS = "http://localhost:5080"
+$env:ASPNETCORE_URLS = "http://localhost:5000"
 dotnet run --project src\CopilotSessionPersistencePoc
 ```
 
-Browser で `http://localhost:5080` を開きます。local SQLite database は
+Browser で `http://localhost:5000` を開きます。local SQLite database は
 `src\CopilotSessionPersistencePoc\data\copilot-sessions.db` に作成されます。
 この directory と WAL/SHM files は Git 対象外です。
 
 Frontend HMR を使う場合は backend と headless CLI に加えて次を実行し、
-Vite が表示する URL を開きます。`/api` は port 5080 へ proxy されます。
+Vite が表示する URL を開きます。`/api` は port 5000 へ proxy されます。
 
 ```powershell
 cd src\CopilotSessionPersistencePoc\ClientApp
@@ -161,6 +161,24 @@ npm run build
 を停止し、同じ SQLite file で再起動しました。再起動前の 4 messages を読み込んだ後、
 以前記憶させた marker を follow-up で回答し、history が 6 events へ更新されることを
 確認しています。
+
+## SessionFS Inspector
+
+Session を選択して **Inspect storage** を開くと、custom SessionFS provider が扱う
+virtual files と実際の保存先を read-only で確認できます。
+
+- `session_fs_nodes` の row、file、directory、content byte 数
+- `/session-state/events.jsonl` の event 数
+- Virtual path、size、timestamp、version
+- 選択した row の content preview と SQLite primary key
+- SQLite database file の実 path と size
+- 対応する `~/.copilot/session-state/{sessionId}` の存在確認
+
+SQLite database file 自体は host filesystem 上に存在しますが、Inspector は
+`events.jsonl`、`workspace.yaml`、checkpoint などが個別の host file ではなく
+`session_fs_nodes` の row/content として保存されていることを evidence とともに表示します。
+任意 SQL は実行できず、content preview は最大 65,536 characters に制限され、既知の
+GitHub/Bearer token pattern は redact されます。
 
 ## Scope
 

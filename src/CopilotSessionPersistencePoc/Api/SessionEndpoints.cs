@@ -1,5 +1,6 @@
 using CopilotSessionPersistencePoc.AppState;
 using CopilotSessionPersistencePoc.Copilot;
+using CopilotSessionPersistencePoc.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using System.Net.Sockets;
@@ -20,6 +21,8 @@ public static class SessionEndpoints
         api.MapGet("/sessions/{id}", GetSessionAsync);
         api.MapPost("/sessions/{id}/messages", SendMessageAsync);
         api.MapDelete("/sessions/{id}", DeleteSessionAsync);
+        api.MapGet("/sessions/{id}/diagnostics", GetDiagnosticsAsync);
+        api.MapGet("/sessions/{id}/diagnostics/entry", GetDiagnosticEntryAsync);
         api.MapGet("/health", GetHealth);
 
         return endpoints;
@@ -174,6 +177,58 @@ public static class SessionEndpoints
                 Detail = exception.Message,
                 Status = StatusCodes.Status409Conflict,
             });
+        }
+    }
+
+    private static async Task<IResult> GetDiagnosticsAsync(
+        string id,
+        IAppSessionRepository repository,
+        ISessionFsDiagnosticsReader diagnostics,
+        IOptions<DiagnosticsOptions> options,
+        CancellationToken cancellationToken)
+    {
+        if (!options.Value.Enabled)
+        {
+            return Results.NotFound();
+        }
+
+        if (await repository.GetAsync(id, cancellationToken) is null)
+        {
+            return Results.NotFound();
+        }
+
+        SessionFsDiagnosticsSnapshot snapshot =
+            await diagnostics.GetSnapshotAsync(id, cancellationToken);
+        return Results.Ok(snapshot);
+    }
+
+    private static async Task<IResult> GetDiagnosticEntryAsync(
+        string id,
+        string path,
+        IAppSessionRepository repository,
+        ISessionFsDiagnosticsReader diagnostics,
+        IOptions<DiagnosticsOptions> options,
+        CancellationToken cancellationToken)
+    {
+        if (!options.Value.Enabled)
+        {
+            return Results.NotFound();
+        }
+
+        if (await repository.GetAsync(id, cancellationToken) is null)
+        {
+            return Results.NotFound();
+        }
+
+        try
+        {
+            SessionFsEntryDetails? entry =
+                await diagnostics.GetEntryAsync(id, path, cancellationToken);
+            return entry is null ? Results.NotFound() : Results.Ok(entry);
+        }
+        catch (ArgumentException exception)
+        {
+            return ValidationProblem(nameof(path), exception.Message);
         }
     }
 

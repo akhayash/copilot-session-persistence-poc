@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using CopilotSessionPersistencePoc.Api;
+using CopilotSessionPersistencePoc.Diagnostics;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -49,6 +50,13 @@ public sealed class SessionApiTests
                 SessionDetailsResponse details = Assert.IsType<SessionDetailsResponse>(
                     await client.GetFromJsonAsync<SessionDetailsResponse>($"/api/sessions/{created.Id}"));
                 Assert.Empty(details.Messages);
+
+                SessionFsDiagnosticsSnapshot diagnostics =
+                    Assert.IsType<SessionFsDiagnosticsSnapshot>(
+                        await client.GetFromJsonAsync<SessionFsDiagnosticsSnapshot>(
+                            $"/api/sessions/{created.Id}/diagnostics"));
+                Assert.Equal("SQLite custom SessionFS provider", diagnostics.Storage.Backend);
+                Assert.Empty(diagnostics.Entries);
 
                 HttpResponseMessage deleteResponse = await client.DeleteAsync($"/api/sessions/{created.Id}");
                 Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);

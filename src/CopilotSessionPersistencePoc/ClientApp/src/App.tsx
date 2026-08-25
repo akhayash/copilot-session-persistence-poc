@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
+import { apiRequest } from './api'
+import SessionInspector from './SessionInspector'
 import './App.css'
 
 type Session = {
@@ -22,27 +24,6 @@ type SessionDetails = {
   messages: Message[]
 }
 
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-  })
-
-  if (!response.ok) {
-    const problem = await response.json().catch(() => null)
-    throw new Error(problem?.detail ?? problem?.title ?? `Request failed (${response.status})`)
-  }
-
-  if (response.status === 204) {
-    return undefined as T
-  }
-
-  return response.json() as Promise<T>
-}
-
 function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [selected, setSelected] = useState<Session | null>(null)
@@ -50,9 +31,11 @@ function App() {
   const [prompt, setPrompt] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [inspectorRefreshKey, setInspectorRefreshKey] = useState(0)
 
   const refreshSessions = useCallback(async () => {
-    const data = await request<Session[]>('/api/sessions')
+    const data = await apiRequest<Session[]>('/api/sessions')
     setSessions(data)
     return data
   }, [])
@@ -65,9 +48,10 @@ function App() {
     setBusy(true)
     setError(null)
     try {
-      const details = await request<SessionDetails>(`/api/sessions/${session.id}`)
+      const details = await apiRequest<SessionDetails>(`/api/sessions/${session.id}`)
       setSelected(details.session)
       setMessages(details.messages)
+      setInspectorRefreshKey((current) => current + 1)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to load the session.')
     } finally {
@@ -79,13 +63,14 @@ function App() {
     setBusy(true)
     setError(null)
     try {
-      const session = await request<Session>('/api/sessions', {
+      const session = await apiRequest<Session>('/api/sessions', {
         method: 'POST',
         body: JSON.stringify({ title: 'New session' }),
       })
       setSessions((current) => [session, ...current])
       setSelected(session)
       setMessages([])
+      setInspectorRefreshKey((current) => current + 1)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to create a session.')
     } finally {
@@ -106,7 +91,7 @@ function App() {
     setMessages((current) => [...current, { role: 'user', content: text }])
 
     try {
-      const response = await request<{ message: Message }>(
+      const response = await apiRequest<{ message: Message }>(
         `/api/sessions/${selected.id}/messages`,
         {
           method: 'POST',
@@ -116,6 +101,7 @@ function App() {
       setMessages((current) => [...current, response.message])
       const refreshed = await refreshSessions()
       setSelected(refreshed.find((session) => session.id === selected.id) ?? selected)
+      setInspectorRefreshKey((current) => current + 1)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Copilot did not return a response.')
     } finally {
@@ -131,10 +117,11 @@ function App() {
     setBusy(true)
     setError(null)
     try {
-      await request<void>(`/api/sessions/${selected.id}`, { method: 'DELETE' })
+      await apiRequest<void>(`/api/sessions/${selected.id}`, { method: 'DELETE' })
       setSessions((current) => current.filter((session) => session.id !== selected.id))
       setSelected(null)
       setMessages([])
+      setInspectorOpen(false)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to delete the session.')
     } finally {
@@ -197,9 +184,18 @@ function App() {
             </p>
           </div>
           {selected && (
-            <button className="delete-button" type="button" onClick={deleteSession} disabled={busy}>
-              Delete
-            </button>
+            <div className="header-actions">
+              <button
+                className="inspect-button"
+                type="button"
+                onClick={() => setInspectorOpen(true)}
+              >
+                Inspect storage
+              </button>
+              <button className="delete-button" type="button" onClick={deleteSession} disabled={busy}>
+                Delete
+              </button>
+            </div>
           )}
         </header>
 
@@ -265,6 +261,14 @@ function App() {
           </p>
         </footer>
       </main>
+      {selected && (
+        <SessionInspector
+          sessionId={selected.id}
+          open={inspectorOpen}
+          refreshKey={inspectorRefreshKey}
+          onClose={() => setInspectorOpen(false)}
+        />
+      )}
     </div>
   )
 }

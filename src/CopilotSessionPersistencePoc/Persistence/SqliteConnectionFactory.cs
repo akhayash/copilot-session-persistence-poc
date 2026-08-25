@@ -13,23 +13,25 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
         IHostEnvironment environment)
     {
         var configured = options.Value;
-        var databasePath = Path.GetFullPath(
+        DatabasePath = Path.GetFullPath(
             configured.DatabasePath,
             environment.ContentRootPath);
 
         Directory.CreateDirectory(
-            Path.GetDirectoryName(databasePath)
+            Path.GetDirectoryName(DatabasePath)
                 ?? throw new InvalidOperationException("The database path has no parent directory."));
 
         connectionString = new SqliteConnectionStringBuilder
         {
-            DataSource = databasePath,
+            DataSource = DatabasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared,
             Pooling = true,
         }.ToString();
         busyTimeoutMilliseconds = configured.BusyTimeoutMilliseconds;
     }
+
+    public string DatabasePath { get; }
 
     public async Task<SqliteConnection> OpenConnectionAsync(
         CancellationToken cancellationToken = default)

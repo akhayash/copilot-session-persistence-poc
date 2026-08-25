@@ -291,6 +291,8 @@ Backend 固有 query や client type を `CopilotSessionService` と API contrac
 | `GET` | `/api/sessions/{id}` | Metadata と SDK events の取得 |
 | `POST` | `/api/sessions/{id}/messages` | Create または resume、message 送信 |
 | `DELETE` | `/api/sessions/{id}` | Agent state と app metadata の削除 |
+| `GET` | `/api/sessions/{id}/diagnostics` | SQLite-backed SessionFS の保存 evidence と virtual tree |
+| `GET` | `/api/sessions/{id}/diagnostics/entry` | 指定 SessionFS row の制限付き content preview |
 | `GET` | `/api/health` | Application、SQLite、Copilot CLI health |
 
 API は typed request/response と Problem Details を使います。
