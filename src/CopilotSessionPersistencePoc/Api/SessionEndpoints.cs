@@ -1,6 +1,7 @@
 using CopilotSessionPersistencePoc.AppState;
 using CopilotSessionPersistencePoc.Copilot;
 using CopilotSessionPersistencePoc.Diagnostics;
+using CopilotSessionPersistencePoc.Persistence;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using System.Net.Sockets;
@@ -83,11 +84,24 @@ public static class SessionEndpoints
 
             return Results.Ok(new SessionDetailsResponse(SessionResponse.From(session), messages));
         }
+        catch (KeyNotFoundException)
+        {
+            return Results.NotFound();
+        }
         catch (SessionBusyException exception)
         {
             return Results.Conflict(new ProblemDetails
             {
                 Title = "Session is busy",
+                Detail = exception.Message,
+                Status = StatusCodes.Status409Conflict,
+            });
+        }
+        catch (SessionConcurrencyException exception)
+        {
+            return Results.Conflict(new ProblemDetails
+            {
+                Title = "Session was modified concurrently",
                 Detail = exception.Message,
                 Status = StatusCodes.Status409Conflict,
             });
@@ -154,19 +168,24 @@ public static class SessionEndpoints
     private static async Task<IResult> DeleteSessionAsync(
         string id,
         IAppSessionRepository repository,
-        SessionLockProvider lockProvider,
+        ISessionLockProvider lockProvider,
         CancellationToken cancellationToken)
     {
-        AppSession? session = await repository.GetAsync(id, cancellationToken);
-        if (session is null)
-        {
-            return Results.NotFound();
-        }
-
         try
         {
-            using IDisposable sessionLock = await lockProvider.TryAcquireAsync(id, cancellationToken);
-            await repository.DeleteAsync(id, cancellationToken);
+            if (!await repository.ExistsForDeletionAsync(id, cancellationToken))
+            {
+                return Results.NoContent();
+            }
+
+            await using ISessionLockHandle sessionLock =
+                await lockProvider.TryAcquireAsync(id, cancellationToken);
+            using var operationCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken,
+                    sessionLock.LockLost);
+            await repository.DeleteAsync(id, operationCancellation.Token);
+            sessionLock.DeleteOnRelease();
             return Results.NoContent();
         }
         catch (SessionBusyException exception)
@@ -177,6 +196,20 @@ public static class SessionEndpoints
                 Detail = exception.Message,
                 Status = StatusCodes.Status409Conflict,
             });
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Problem(
+                title: "Session deletion did not complete",
+                detail: "The distributed session lock was lost before deletion completed.",
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (IOException exception)
+        {
+            return Results.Problem(
+                title: "Session deletion did not complete",
+                detail: exception.Message,
+                statusCode: StatusCodes.Status503ServiceUnavailable);
         }
     }
 
@@ -234,6 +267,7 @@ public static class SessionEndpoints
 
     private static async Task<IResult> GetHealth(
         IOptions<CopilotOptions> options,
+        IOptions<PersistenceOptions> persistence,
         CancellationToken cancellationToken)
     {
         Uri cliUrl = options.Value.CliUrl;
@@ -241,12 +275,13 @@ public static class SessionEndpoints
         try
         {
             await client.ConnectAsync(cliUrl.Host, cliUrl.Port, cancellationToken);
-            return Results.Ok(new HealthResponse("healthy", "SQLite", "reachable"));
+            return Results.Ok(
+                new HealthResponse("healthy", persistence.Value.Backend, "reachable"));
         }
         catch (SocketException)
         {
             return Results.Json(
-                new HealthResponse("degraded", "SQLite", "unreachable"),
+                new HealthResponse("degraded", persistence.Value.Backend, "unreachable"),
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
     }

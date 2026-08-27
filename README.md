@@ -1,99 +1,63 @@
 # Copilot Session Persistence PoC
 
-GitHub Copilot SDK の session persistence を、React、ASP.NET Core、SQLite で
-検証する local Web application です。
+GitHub Copilot SDK の会話を Web サーバーの再起動後も継続できるか検証する
+React + ASP.NET Core アプリケーションです。
 
-この PoC の中心は、Web process を stateful にせず、次の 2 種類の状態を
-明確に分離することです。
+会話の内容は Web サーバーのメモリに保持せず、GitHub Copilot SDK の
+`SessionFsProvider` を通して SQLite または Azure Blob Storage に保存します。
+そのため、別の Web サーバーから同じセッションを再開できます。
 
-| 状態 | 保存先 | 責務 |
+## 何を確認できるか
+
+- React から Copilot セッションを作成してメッセージを送信する
+- Web サーバーと GitHub Copilot CLI を停止・再起動して会話を再開する
+- セッションの保存内容を Inspector で確認する
+- Azure Storage を使い、複数 Web node から同じセッションを安全に扱う
+- 最初のuser messageから`New session`のtitleを自動生成する
+
+## 2 つの実行モード
+
+| | SQLite mode | Azure Storage mode |
 | --- | --- | --- |
-| Session 一覧、title、model、作成日時、初期化状態 | SQLite `app_sessions` | Application |
-| Conversation events、checkpoints、plan、workspace、temporary files | SQLite-backed custom `SessionFsProvider` | GitHub Copilot SDK |
+| 用途 | ローカルでの再起動検証 | Multi-node の検証 |
+| セッション一覧 | SQLite | Azure Table Storage |
+| 会話と agent state | SQLite | Azure Blob Storage |
+| 同時実行の制御 | プロセス内 lock | Azure Blob lease |
+| Artifact | 対象外 | Azure Blob Storage の contract |
 
-Application が Copilot の内部状態を独自形式へシリアライズするのではなく、
-agent state は SDK の SessionFS contract を通して保存します。
+2つのmodeは排他的です。`Persistence:Backend`を起動時に一度だけ評価し、SQLite一式
+またはAzure Storage一式のどちらかだけをdependency injectionへ登録します。
 
-## 最初に検証すること
+Azure Storage mode では、各 Web node が専用の headless GitHub Copilot CLI runtime
+に接続します。Web node と runtime は別プロセスの 1:1 pair です。共有するのは
+runtime ではなく、Azure Storage に保存したデータです。
 
-1. React から session を作成して message を送る
-2. ASP.NET Core backend が GitHub Copilot SDK session を作成する
-3. SDK が出力する session state を custom `SessionFsProvider` 経由で SQLite へ保存する
-4. Backend process を停止する
-5. 同じ SQLite database を使って backend を再起動する
-6. 新しい `CopilotClient` で session を resume する
-7. 再起動前の context を使った response が返ることを確認する
+詳しい仕組みは [Architecture](docs/architecture.md) を参照してください。
 
-成功条件は、active `CopilotSession` object や local
-`~/.copilot/session-state` directory に依存せず、SQLite から conversation を
-再開できることです。
-
-## 構成
+## Repository の構成
 
 ```text
-React + Vite
-    |
-    v
-ASP.NET Core Minimal API (.NET 10)
-    |
-    +-- IAppSessionRepository
-    |       `-- SqliteAppSessionRepository --> app_sessions
-    |
-    `-- GitHub Copilot SDK
-            `-- ISessionFsProviderFactory
-                    `-- SqliteSessionFsProvider --> session_fs_nodes
+src/CopilotSessionPersistencePoc/
+  Api/                 Minimal API
+  AppState/            セッション一覧と metadata
+  Copilot/             Copilot client、session、lock
+  SessionFs/           SQLite / Azure Blob SessionFS provider
+  ArtifactStorage/     Azure Blob Artifact store
+  Diagnostics/         SessionFS Inspector
+  Persistence/         SQLite / Azure Storage client と初期化
+  ClientApp/           React + TypeScript
+
+tests/
+  CopilotSessionPersistencePoc.Tests/
+
+docs/
+  architecture.md      設計と Multi-node の仕組み
+  sqlite-mode.md       Local SQLite mode
+  azure-storage-mode.md Azure Storage mode
+  validation.md        検証条件と結果
+
+infra/container-apps/  Azure Container Apps Bicep と運用手順
 ```
-
-deployable application は 1 project にまとめます。React は `ClientApp` に置き、
-development では Vite から `/api` を proxy し、build 後は ASP.NET Core が
-static files として配信します。
-
-詳細は [Architecture](docs/architecture.md) を参照してください。
-
-## Technology
-
-- .NET 10
-- ASP.NET Core Minimal API
-- React
-- TypeScript
-- Vite
-- `GitHub.Copilot.SDK`
-- `Microsoft.Data.Sqlite`
-- xUnit
-
-## Dependency injection
-
-最初の backend は SQLite ですが、application code は具体実装へ直接依存させません。
-
-- `IAppSessionRepository`
-  - Current: SQLite
-  - Future: SQL Server、Azure Cosmos DB
-- `ISessionFsProviderFactory`
-  - Current: SQLite-backed SessionFS
-  - Future: Azure Blob Storage、Azure Cosmos DB-backed SessionFS
-- `ICopilotClientFactory`
-  - Current: external local headless Copilot CLI
-  - Future: hosted runtime connection
-
-同じ SQLite file を使っても、application state と agent state は table と
-access layer を分離します。
-
-## Local authentication
-
-この PoC では GitHub OAuth UI や token database を作りません。
-
-既定では、sign in 済みの GitHub Copilot CLI を headless server として起動し、
-ASP.NET Core は `localhost:4321` へ接続します。外部 runtime への接続では、
-authentication は headless CLI process が管理します。必要であれば CLI 起動前に
-`COPILOT_GITHUB_TOKEN`、`GH_TOKEN`、または `GITHUB_TOKEN` を設定してください。
-
-Credential は次の場所へ保存しません。
-
-- React/browser
-- SQLite
-- `appsettings.json`
-- Git history
-- Application log
 
 ## Prerequisites
 
@@ -102,11 +66,11 @@ Credential は次の場所へ保存しません。
 - GitHub Copilot CLI
 - GitHub Copilot subscription を利用できる GitHub account
 
-最初に CLI の対話 mode を起動し、`/login` で sign in 済みであることを確認します。
+最初に GitHub Copilot CLI を対話 mode で起動し、`/login` で sign in してください。
 
-## Run locally
+## ローカルで実行する
 
-初回だけ frontend dependencies を復元して build します。
+### 1. Frontend を build
 
 ```powershell
 cd src\CopilotSessionPersistencePoc\ClientApp
@@ -115,18 +79,18 @@ npm run build
 cd ..\..\..
 ```
 
-推奨構成では、推測困難な connection token を 2 つの terminal へ同じ値で設定します。
-次の例では説明のため固定文字列を使っていますが、実際には password manager などで
-生成した random value を使ってください。
+### 2. GitHub Copilot CLI を起動
 
-Terminal 1:
+推測困難な connection token を生成し、CLI と Web の両方へ同じ値を設定します。
 
 ```powershell
 $env:COPILOT_CONNECTION_TOKEN = "<random-local-token>"
 copilot --headless --port 4321
 ```
 
-Terminal 2:
+### 3. Web application を起動
+
+別の terminal で実行します。
 
 ```powershell
 $env:COPILOT_CONNECTION_TOKEN = "<random-local-token>"
@@ -134,17 +98,79 @@ $env:ASPNETCORE_URLS = "http://localhost:5000"
 dotnet run --project src\CopilotSessionPersistencePoc
 ```
 
-Browser で `http://localhost:5000` を開きます。local SQLite database は
-`src\CopilotSessionPersistencePoc\data\copilot-sessions.db` に作成されます。
-この directory と WAL/SHM files は Git 対象外です。
+Browser で `http://localhost:5000` を開きます。
 
-Frontend HMR を使う場合は backend と headless CLI に加えて次を実行し、
-Vite が表示する URL を開きます。`/api` は port 5000 へ proxy されます。
+SQLite database は
+`src\CopilotSessionPersistencePoc\data\copilot-sessions.db` に作成されます。
+
+### Frontend HMR
 
 ```powershell
 cd src\CopilotSessionPersistencePoc\ClientApp
 npm run dev
 ```
+
+Vite が表示する URL を開きます。`/api` は port 5000 へ proxy されます。
+
+## Azure Storage mode
+
+`Persistence:Backend` を `AzureStorage` にすると、次の共有ストレージを使用します。
+
+- Azure Table Storage: セッションの title、model、作成日時、初期化状態
+- Azure Blob Storage: GitHub Copilot SDK の SessionFS snapshot
+- Azure Blob Storage: セッション単位の lease
+- Azure Blob Storage: Artifact store contract
+
+各 Web node は異なる `Copilot:CliUrl` を指定し、専用 runtime に接続してください。
+SQLite connectionとdatabase initializerは使用せず、Azure接続失敗時にSQLiteへfallback
+しません。
+
+```powershell
+az login
+$env:Persistence__Backend = "AzureStorage"
+$env:AzureStorage__BlobServiceUri = "https://<account>.blob.core.windows.net"
+$env:AzureStorage__TableServiceUri = "https://<account>.table.core.windows.net"
+$env:Copilot__CliUrl = "http://localhost:4322"
+$env:ASPNETCORE_URLS = "http://localhost:5100"
+dotnet run --project src\CopilotSessionPersistencePoc
+```
+
+必要な data-plane role:
+
+- `Storage Blob Data Contributor`
+- `Storage Table Data Contributor`
+
+Azurite を使う場合:
+
+```powershell
+$env:Persistence__Backend = "AzureStorage"
+$env:AzureStorage__ConnectionString = "UseDevelopmentStorage=true"
+```
+
+## SessionFS Inspector
+
+Session を選択して **Inspect storage** を開くと、次の情報を read-only で確認できます。
+
+- SessionFS の virtual file と directory
+- `/session-state/events.jsonl` の event 数
+- path、size、timestamp、version
+- 制限付きの content preview
+- SQLite database または Azure Blob の保存先
+- Application metadata、SessionFS、lock、Artifactそれぞれのactive backend
+- `~/.copilot/session-state/{sessionId}` への意図しない保存の有無
+
+Content preview は最大 65,536 文字で、既知の GitHub token pattern を redact します。
+任意の SQL は実行できません。
+
+## Screenshots
+
+### Session workspace
+
+![Session workspace showing the Azure Storage persistence mode](docs/images/session-list.png)
+
+### SessionFS Inspector
+
+![SessionFS Inspector showing Azure Table Storage, Blob Storage, and Blob lease](docs/images/sessionfs-inspector.png)
 
 ## Test
 
@@ -156,66 +182,75 @@ npm run lint
 npm run build
 ```
 
-通常の tests は real Copilot service を呼びません。認証を伴う restart verification
-は local-only です。実際の検証では 2 messages 後に Web と headless CLI の両 process
-を停止し、同じ SQLite file で再起動しました。再起動前の 4 messages を読み込んだ後、
-以前記憶させた marker を follow-up で回答し、history が 6 events へ更新されることを
-確認しています。
+Azure Storage integration test:
 
-## SessionFS Inspector
+```powershell
+$env:AZURE_STORAGE_CONNECTION_STRING = "UseDevelopmentStorage=true"
+dotnet test CopilotSessionPersistencePoc.slnx `
+  --filter FullyQualifiedName~AzureStorageMultiNodeIntegrationTests
+```
 
-Session を選択して **Inspect storage** を開くと、custom SessionFS provider が扱う
-virtual files と実際の保存先を read-only で確認できます。
-
-- `session_fs_nodes` の row、file、directory、content byte 数
-- `/session-state/events.jsonl` の event 数
-- Virtual path、size、timestamp、version
-- Canonical `/session-state` と Windows host path 風の virtual key の分類
-- 選択した row の content preview と SQLite primary key
-- SQLite database file の実 path と size
-- 対応する `~/.copilot/session-state/{sessionId}` の存在確認
-
-SQLite database file 自体は host filesystem 上に存在しますが、Inspector は
-`events.jsonl`、`workspace.yaml`、checkpoint などが個別の host file ではなく
-`session_fs_nodes` の row/content として保存されていることを evidence とともに表示します。
-`/C:/Users/...` のような key は **Host-shaped virtual keys** として分離表示し、
-実 file path ではなく SQLite の `path` value であることを明示します。
-`~/.copilot/session-state/{sessionId}` は保存先として表示するものではなく、
-通常の CLI file storage に session data が漏れていないことを確認するための
-**Disk leak check** の比較対象です。
-任意 SQL は実行できず、content preview は最大 65,536 characters に制限され、既知の
-GitHub/Bearer token pattern は redact されます。
+実行済みの検証条件と結果は [Validation](docs/validation.md) に記録しています。
 
 ## Scope
 
-### Included
+実装済み:
 
-- Session metadata の SQLite persistence
-- SQLite-backed custom `SessionFsProvider`
-- Session create、dispose、resume
-- React chat UI
-- Backend restart 後の context recovery
-- Unit、integration、restart E2E tests
+- SQLite / Azure Table Storage による application metadata の保存
+- SQLite / Azure Blob Storage による custom SessionFS
+- Session の create、dispose、resume
+- Azure Container Apps built-in authentication と Microsoft Entra ID による user sign-in
+- Microsoft Entra principal Object ID allow-listによるdeployment access restriction
+- Azure Blob lease による session lock
+- SQLite / Azure Blob Storage の diagnostics
+- Azure Blob Storage の Artifact store contract
 
-### Not included
+対象外:
 
-- Azure deployment
-- GitHub OAuth / GitHub App
-- Multi-user authorization
-- SQL Server / Azure Cosmos DB / Azure Blob Storage implementation
-- SDK の `ISessionFsSqliteProvider` と agent SQL tool
-- Distributed lock と multi-instance scaling
-- Production retention、backup、encryption policy
+- GitHub OAuth / GitHub App と application role ベースの authorization
+- Artifact の Web API と conversation metadata への組み込み
+- Production-grade fencing、multi-region scaling、backup、retention
+- SQL Server / Azure Cosmos DB implementation
 
-## Security and local-only limitations
+## Security
 
-- `CopilotClientMode.Empty` と空の `AvailableTools` を使い、host filesystem、network、
-  shell tool を agent に公開しません。
-- `COPILOT_CONNECTION_TOKEN` を設定しない場合、headless CLI は local client connection
-  を認証しません。
-- API に user authorization はありません。trusted local development machine 専用です。
-- Lock は process 内だけです。複数 Web instance から同じ session を同時利用できません。
-- SQLite file の backup、encryption、retention は実装していません。
+- `CopilotClientMode.Empty` と空の `AvailableTools` を使用し、agent に host filesystem、
+  network、shell tool を公開しません。
+- Credential と connection token を browser、database、API payload、log に保存しません。
+- Azure Container Apps deployment では built-in authentication が Microsoft Entra ID
+  sign-inと明示したprincipal Object IDを要求します。Local 実行にはuser
+  authenticationを適用しません。
+- Azure Blob lease の喪失は operation cancellation に伝播しますが、fencing token は
+  未実装です。
+
+### Azure 上の user authentication
+
+Azure Container Apps の public ingress は、platform の built-in authentication
+（Easy Auth）と Microsoft Entra ID で保護します。Application code に login UI、
+cookie、password database は実装しません。
+
+- Single-tenant application registration を使用
+- Application registration は Azure resource と別 tenant に配置可能
+- 未認証 browser は Microsoft Entra ID sign-in へ redirect
+- 認証済みrequestはdeployment parameterで指定した1つのprincipal Object IDだけを許可
+- `/api/health` は Container Apps の probe 用に匿名アクセスを許可
+- Client secret は Container Apps secret に保存
+- Local SQLite mode では user authentication を無効化
+
+このallow-listはPoC環境へのaccessを限定するためのplatform authorizationです。複数user
+向けのsession ownership、application role、sessionごとのauthorizationは実装していません。
+
+Application registration と deployment parameter の設定は
+[Azure Container Apps deployment](infra/container-apps/README.md#web-authentication)
+を参照してください。
+
+## Documents
+
+- [Architecture](docs/architecture.md)
+- [Local SQLite mode](docs/sqlite-mode.md)
+- [Azure Storage mode](docs/azure-storage-mode.md)
+- [Validation](docs/validation.md)
+- [Azure Container Apps deployment](infra/container-apps/README.md)
 
 ## References
 

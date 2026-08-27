@@ -564,6 +564,10 @@ button:disabled {
   font-size: 11px;
 }
 
+.backend-map dd {
+  color: #7dd3fc;
+}
+
 .not-storage-label {
   display: block;
   width: fit-content;

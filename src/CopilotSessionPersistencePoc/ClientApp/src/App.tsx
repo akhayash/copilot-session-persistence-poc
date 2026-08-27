@@ -24,6 +24,10 @@ type SessionDetails = {
   messages: Message[]
 }
 
+type Health = {
+  persistence: string
+}
+
 function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [selected, setSelected] = useState<Session | null>(null)
@@ -33,6 +37,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [inspectorRefreshKey, setInspectorRefreshKey] = useState(0)
+  const [persistenceBackend, setPersistenceBackend] = useState('SQLite')
 
   const refreshSessions = useCallback(async () => {
     const data = await apiRequest<Session[]>('/api/sessions')
@@ -42,6 +47,10 @@ function App() {
 
   useEffect(() => {
     refreshSessions().catch((reason: Error) => setError(reason.message))
+    fetch('/api/health')
+      .then(async (response) => (await response.json()) as Health)
+      .then((health) => setPersistenceBackend(health.persistence))
+      .catch(() => undefined)
   }, [refreshSessions])
 
   async function selectSession(session: Session) {
@@ -50,6 +59,9 @@ function App() {
     try {
       const details = await apiRequest<SessionDetails>(`/api/sessions/${session.id}`)
       setSelected(details.session)
+      setSessions((current) =>
+        current.map((item) => (item.id === details.session.id ? details.session : item)),
+      )
       setMessages(details.messages)
       setInspectorRefreshKey((current) => current + 1)
     } catch (reason) {
@@ -167,8 +179,12 @@ function App() {
         <div className="storage-card">
           <span className="status-dot" aria-hidden="true"></span>
           <div>
-            <strong>SQLite connected</strong>
-            <span>Application + agent state</span>
+            <strong>{persistenceBackend} connected</strong>
+            <span>
+              {persistenceBackend === 'AzureStorage'
+                ? 'Table metadata + Blob SessionFS'
+                : 'SQLite metadata + SessionFS'}
+            </span>
           </div>
         </div>
       </aside>
@@ -206,7 +222,7 @@ function App() {
               <h2>Session state that outlives the Web process.</h2>
               <p>
                 Conversation events, workspace files, checkpoints, and plans are persisted through
-                a custom SessionFS provider backed by SQLite.
+                a custom SessionFS provider backed by {persistenceBackend}.
               </p>
               <button type="button" onClick={createSession} disabled={busy}>
                 Create the first session
@@ -216,7 +232,7 @@ function App() {
             <div className="first-message">
               <div className="spark">✦</div>
               <h2>What should we work on?</h2>
-              <p>The first message initializes this Copilot session in SQLite.</p>
+              <p>The first message initializes this Copilot session in {persistenceBackend}.</p>
             </div>
           ) : (
             <div className="message-stack">
@@ -257,7 +273,7 @@ function App() {
             </button>
           </form>
           <p className="diagnostic">
-            {selected ? `Session ${selected.id}` : 'Persistence backend: SQLite'}
+            {selected ? `Session ${selected.id}` : `Persistence backend: ${persistenceBackend}`}
           </p>
         </footer>
       </main>

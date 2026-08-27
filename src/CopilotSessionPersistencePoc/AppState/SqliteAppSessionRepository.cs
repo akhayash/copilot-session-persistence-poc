@@ -51,6 +51,11 @@ public sealed class SqliteAppSessionRepository(ISqliteConnectionFactory connecti
             : null;
     }
 
+    public async Task<bool> ExistsForDeletionAsync(
+        string id,
+        CancellationToken cancellationToken = default) =>
+        await GetAsync(id, cancellationToken).ConfigureAwait(false) is not null;
+
     public async Task<AppSession> CreateAsync(
         string id,
         string title,
@@ -80,12 +85,14 @@ public sealed class SqliteAppSessionRepository(ISqliteConnectionFactory connecti
     public async Task<AppSession> MarkInitializedAsync(
         string id,
         long expectedVersion,
+        string? title = null,
         CancellationToken cancellationToken = default)
     {
         await UpdateVersionedAsync(
                 id,
                 expectedVersion,
-                "is_initialized = 1,",
+                markInitialized: true,
+                title,
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -97,7 +104,12 @@ public sealed class SqliteAppSessionRepository(ISqliteConnectionFactory connecti
         string id,
         long expectedVersion,
         CancellationToken cancellationToken = default) =>
-        UpdateVersionedAsync(id, expectedVersion, string.Empty, cancellationToken);
+        UpdateVersionedAsync(
+            id,
+            expectedVersion,
+            markInitialized: false,
+            title: null,
+            cancellationToken);
 
     public async Task DeleteAsync(
         string id,
@@ -130,21 +142,28 @@ public sealed class SqliteAppSessionRepository(ISqliteConnectionFactory connecti
     private async Task UpdateVersionedAsync(
         string id,
         long expectedVersion,
-        string additionalSetClause,
+        bool markInitialized,
+        string? title,
         CancellationToken cancellationToken)
     {
         await using var connection =
             await connectionFactory.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = $"""
+        command.CommandText = """
             UPDATE app_sessions
-            SET {additionalSetClause}
+            SET is_initialized = CASE
+                    WHEN $markInitialized = 1 THEN 1
+                    ELSE is_initialized
+                END,
+                title = COALESCE($title, title),
                 updated_at = $updatedAt,
                 version = version + 1
             WHERE id = $id AND version = $expectedVersion;
             """;
         command.Parameters.AddWithValue("$id", id);
         command.Parameters.AddWithValue("$expectedVersion", expectedVersion);
+        command.Parameters.AddWithValue("$markInitialized", markInitialized ? 1 : 0);
+        command.Parameters.AddWithValue("$title", (object?)title ?? DBNull.Value);
         command.Parameters.AddWithValue("$updatedAt", FormatTimestamp(DateTimeOffset.UtcNow));
 
         if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)

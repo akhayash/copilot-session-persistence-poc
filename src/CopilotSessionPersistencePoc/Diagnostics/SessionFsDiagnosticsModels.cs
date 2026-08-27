@@ -10,10 +10,15 @@ public sealed record SessionFsEntryInfo(
     long Version);
 
 public sealed record SessionFsStorageEvidence(
+    string PersistenceMode,
+    string ApplicationMetadataBackend,
+    string SessionFsBackend,
+    string SessionLockBackend,
+    string ArtifactBackend,
     string Backend,
-    string DatabasePath,
-    bool DatabaseFileExists,
-    long DatabaseSizeBytes,
+    string StorageLocation,
+    bool StorageObjectExists,
+    long StorageSizeBytes,
     string HostSessionDirectory,
     bool HostSessionDirectoryExists,
     bool IndividualSessionFilesDetected,
@@ -35,6 +40,6 @@ public sealed record SessionFsEntryDetails(
     string? Content,
     bool ContentTruncated,
     int OriginalCharacterCount,
-    string StorageTable,
+    string StorageObject,
     string SessionKey,
     string PathKey);

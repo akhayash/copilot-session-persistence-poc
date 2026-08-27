@@ -12,10 +12,15 @@ type SessionFsEntry = {
 }
 
 type StorageEvidence = {
+  persistenceMode: string
+  applicationMetadataBackend: string
+  sessionFsBackend: string
+  sessionLockBackend: string
+  artifactBackend: string
   backend: string
-  databasePath: string
-  databaseFileExists: boolean
-  databaseSizeBytes: number
+  storageLocation: string
+  storageObjectExists: boolean
+  storageSizeBytes: number
   hostSessionDirectory: string
   hostSessionDirectoryExists: boolean
   individualSessionFilesDetected: boolean
@@ -39,7 +44,7 @@ type EntryDetails = {
   content: string | null
   contentTruncated: boolean
   originalCharacterCount: number
-  storageTable: string
+  storageObject: string
   sessionKey: string
   pathKey: string
 }
@@ -65,13 +70,13 @@ const pathGroups = [
   {
     category: 'canonical-session-state',
     title: 'Canonical SessionFS',
-    description: 'Configured /session-state namespace. Every item below is a SQLite row.',
+    description: 'Configured /session-state namespace. Every item below is a virtual node.',
   },
   {
     category: 'host-shaped-virtual-key',
     title: 'Host-shaped virtual keys',
     description:
-      'Windows-shaped strings supplied by the SDK. They remain SQLite keys and are not proof of disk files.',
+      'Windows-shaped strings supplied by the SDK. They remain virtual keys and are not proof of disk files.',
   },
   {
     category: 'virtual',
@@ -146,7 +151,7 @@ export default function SessionInspector({
       setSelected(details)
     } catch (reason) {
       if (controller.signal.aborted) return
-      setError(reason instanceof Error ? reason.message : 'Unable to read the SQLite row.')
+      setError(reason instanceof Error ? reason.message : 'Unable to read the storage entry.')
     } finally {
       if (!controller.signal.aborted) setLoading(false)
     }
@@ -173,7 +178,7 @@ export default function SessionInspector({
 
       {error && <div className="inspector-error">{error}</div>}
       {!snapshot ? (
-        <div className="inspector-loading">{loading ? 'Reading SQLite...' : 'No data.'}</div>
+        <div className="inspector-loading">{loading ? 'Reading storage...' : 'No data.'}</div>
       ) : (
         <div className="inspector-body">
           <section
@@ -189,7 +194,7 @@ export default function SessionInspector({
                 <strong>
                   {snapshot.storage.individualSessionFilesDetected
                     ? 'Host files detected'
-                    : 'SQLite-only SessionFS verified'}
+                    : 'External SessionFS verified'}
                 </strong>
                 <span>{snapshot.storage.backend}</span>
               </div>
@@ -198,17 +203,43 @@ export default function SessionInspector({
           </section>
 
           <section>
+            <h3>Active persistence mode</h3>
+            <dl className="evidence-list backend-map">
+              <div>
+                <dt>Mode</dt>
+                <dd>{snapshot.storage.persistenceMode}</dd>
+              </div>
+              <div>
+                <dt>Session list</dt>
+                <dd>{snapshot.storage.applicationMetadataBackend}</dd>
+              </div>
+              <div>
+                <dt>Conversation / SessionFS</dt>
+                <dd>{snapshot.storage.sessionFsBackend}</dd>
+              </div>
+              <div>
+                <dt>Session lock</dt>
+                <dd>{snapshot.storage.sessionLockBackend}</dd>
+              </div>
+              <div>
+                <dt>Artifacts</dt>
+                <dd>{snapshot.storage.artifactBackend}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section>
             <h3>Persistence evidence</h3>
             <dl className="evidence-list">
               <div>
-                <dt>SQLite database</dt>
-                <dd>{snapshot.storage.databasePath}</dd>
+                <dt>Storage location</dt>
+                <dd>{snapshot.storage.storageLocation}</dd>
               </div>
               <div>
-                <dt>Database file</dt>
+                <dt>Storage object</dt>
                 <dd>
-                  {snapshot.storage.databaseFileExists ? 'Exists' : 'Missing'} ·{' '}
-                  {formatBytes(snapshot.storage.databaseSizeBytes)}
+                  {snapshot.storage.storageObjectExists ? 'Exists' : 'Missing'} ·{' '}
+                  {formatBytes(snapshot.storage.storageSizeBytes)}
                 </dd>
               </div>
               <div>
@@ -231,14 +262,14 @@ export default function SessionInspector({
                 >
                   {snapshot.storage.individualSessionFilesDetected
                     ? 'Individual files detected'
-                    : 'NOT PRESENT — content remains in SQLite rows'}
+                    : 'NOT PRESENT — content remains in the configured external store'}
                 </dd>
               </div>
             </dl>
           </section>
 
           <section>
-            <h3>SQLite contents</h3>
+            <h3>SessionFS contents</h3>
             <div className="stats-grid">
               <div>
                 <strong>{snapshot.nodeCount}</strong>
@@ -282,7 +313,7 @@ export default function SessionInspector({
                           <strong>{group.title}</strong>
                           <span>{group.description}</span>
                         </div>
-                        <span className="sqlite-row-badge">{entries.length} SQLite rows</span>
+                        <span className="sqlite-row-badge">{entries.length} virtual nodes</span>
                       </div>
                       <div className="fs-tree">
                         {entries.map((entry) => (
@@ -312,11 +343,11 @@ export default function SessionInspector({
 
           {selected && (
             <section className="entry-details">
-              <h3>Selected SQLite row</h3>
+              <h3>Selected storage entry</h3>
               <dl className="evidence-list">
                 <div>
-                  <dt>Table</dt>
-                  <dd>{selected.storageTable}</dd>
+                  <dt>Storage object</dt>
+                  <dd>{selected.storageObject}</dd>
                 </div>
                 <div>
                   <dt>Primary key</dt>
@@ -330,7 +361,7 @@ export default function SessionInspector({
                   <dt>Path origin</dt>
                   <dd>
                     {selected.entry.pathCategory === 'host-shaped-virtual-key'
-                      ? 'Host-shaped virtual key — stored in SQLite, not resolved by this UI'
+                      ? 'Host-shaped virtual key — not resolved as a host path by this UI'
                       : selected.entry.pathCategory}
                   </dd>
                 </div>

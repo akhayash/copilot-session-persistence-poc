@@ -98,6 +98,7 @@ artifacts/
 *.sqlite3
 data/
 .copilot/
+.playwright-mcp/
 
 # React and Vite
 node_modules/

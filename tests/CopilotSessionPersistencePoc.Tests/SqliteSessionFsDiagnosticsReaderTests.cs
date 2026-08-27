@@ -25,7 +25,7 @@ public sealed class SqliteSessionFsDiagnosticsReaderTests : IDisposable
         Assert.Null(await handler.WriteFileAsync(new SessionFsWriteFileRequest
         {
             Path = "/session-state/workspace.yaml",
-            Content = "token: ghp_1234567890abcdefghijklmnop",
+            Content = "token: ghp_" + "1234567890abcdefghijklmnop",
         }, default));
 
         var reader = new SqliteSessionFsDiagnosticsReader(
@@ -36,7 +36,7 @@ public sealed class SqliteSessionFsDiagnosticsReaderTests : IDisposable
             await reader.GetEntryAsync(sessionId, "/session-state/workspace.yaml");
 
         Assert.Equal("SQLite custom SessionFS provider", snapshot.Storage.Backend);
-        Assert.True(snapshot.Storage.DatabaseFileExists);
+        Assert.True(snapshot.Storage.StorageObjectExists);
         Assert.False(snapshot.Storage.IndividualSessionFilesDetected);
         Assert.Equal(2, snapshot.EventCount);
         Assert.Equal(3, snapshot.NodeCount);
@@ -46,7 +46,7 @@ public sealed class SqliteSessionFsDiagnosticsReaderTests : IDisposable
         Assert.NotNull(details);
         Assert.True(details.ContentTruncated);
         Assert.DoesNotContain("ghp_1234567890", details.Content, StringComparison.Ordinal);
-        Assert.Equal("session_fs_nodes", details.StorageTable);
+        Assert.Equal("session_fs_nodes", details.StorageObject);
     }
 
     [Fact]

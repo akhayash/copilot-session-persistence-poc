@@ -35,6 +35,11 @@ public sealed class SqliteSessionFsDiagnosticsReader(
                     SearchOption.AllDirectories)
                 .Any();
         var storage = new SessionFsStorageEvidence(
+            "Sqlite",
+            "SQLite table: app_sessions",
+            "SQLite table: session_fs_nodes",
+            "In-process session semaphore",
+            "Not configured",
             "SQLite custom SessionFS provider",
             connectionFactory.DatabasePath,
             databaseFile.Exists,

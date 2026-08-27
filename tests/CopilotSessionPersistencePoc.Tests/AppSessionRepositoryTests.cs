@@ -16,12 +16,14 @@ public sealed class AppSessionRepositoryTests : IDisposable
 
         var initialized = await firstRepository.MarkInitializedAsync(
             created.Id,
-            created.Version);
+            created.Version,
+            "First prompt title");
         var secondRepository = new SqliteAppSessionRepository(connectionFactory);
         var restored = await secondRepository.GetAsync(created.Id);
 
         Assert.NotNull(restored);
         Assert.True(restored.IsInitialized);
+        Assert.Equal("First prompt title", restored.Title);
         Assert.Equal(initialized.Version, restored.Version);
     }
 

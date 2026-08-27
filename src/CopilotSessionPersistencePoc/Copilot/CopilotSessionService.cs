@@ -9,10 +9,13 @@ public sealed class CopilotSessionService(
     IAppSessionRepository sessions,
     ISessionFsProviderFactory sessionFsProviders,
     ICopilotClientFactory clientFactory,
-    SessionLockProvider lockProvider,
+    ISessionLockProvider lockProvider,
     IOptions<CopilotOptions> options,
     ILogger<CopilotSessionService> logger)
 {
+    private const string DefaultSessionTitle = "New session";
+    private const int GeneratedTitleMaximumLength = 80;
+
     private static readonly Action<ILogger, string, string?, string?, Exception?> LogCopilotError =
         LoggerMessage.Define<string, string?, string?>(
             LogLevel.Error,
@@ -31,60 +34,82 @@ public sealed class CopilotSessionService(
         CancellationToken cancellationToken)
     {
         AppSession appSession = await GetRequiredSessionAsync(sessionId, cancellationToken);
-        using IDisposable sessionLock = await lockProvider.TryAcquireAsync(sessionId, cancellationToken);
-        CopilotClient client = await clientFactory.GetClientAsync(cancellationToken);
-        bool shouldResume = appSession.IsInitialized
-            || await sessionFsProviders.HasSessionStateAsync(sessionId, cancellationToken);
-
-        await using CopilotSession copilotSession = shouldResume
-            ? await client.ResumeSessionAsync(appSession.Id, CreateResumeConfig(appSession), cancellationToken)
-            : await client.CreateSessionAsync(CreateSessionConfig(appSession), cancellationToken);
-        using IDisposable subscription = copilotSession.On<SessionEvent>(sessionEvent =>
-        {
-            if (sessionEvent is SessionErrorEvent error)
+        await using ISessionLockHandle sessionLock =
+            await lockProvider.TryAcquireAsync(sessionId, cancellationToken);
+        return await ExecuteWithLockAsync(
+            sessionId,
+            sessionLock,
+            async operationToken =>
             {
-                LogCopilotError(
-                    logger,
+                appSession = await GetRequiredSessionUnderLockAsync(
+                    sessionId,
+                    sessionLock,
+                    operationToken);
+                CopilotClient client = await clientFactory.GetClientAsync(operationToken);
+                bool shouldResume = appSession.IsInitialized
+                    || await sessionFsProviders.HasSessionStateAsync(
+                        sessionId,
+                        operationToken);
+
+                await using CopilotSession copilotSession = shouldResume
+                    ? await client.ResumeSessionAsync(
+                        appSession.Id,
+                        CreateResumeConfig(appSession),
+                        operationToken)
+                    : await client.CreateSessionAsync(
+                        CreateSessionConfig(appSession),
+                        operationToken);
+                using IDisposable subscription = copilotSession.On<SessionEvent>(sessionEvent =>
+                {
+                    if (sessionEvent is SessionErrorEvent error)
+                    {
+                        LogCopilotError(
+                            logger,
+                            appSession.Id,
+                            error.Data.ErrorType,
+                            error.Data.Message,
+                            null);
+                    }
+                    else if (logger.IsEnabled(LogLevel.Debug))
+                    {
+                        LogCopilotEvent(
+                            logger,
+                            appSession.Id,
+                            sessionEvent.Type.ToString(),
+                            null);
+                    }
+                });
+
+                AssistantMessageEvent? response;
+                try
+                {
+                    response = await copilotSession.SendAndWaitAsync(
+                        prompt,
+                        options.Value.ResponseTimeout,
+                        operationToken);
+                }
+                catch (Exception exception)
+                    when (exception is TimeoutException or OperationCanceledException)
+                {
+                    await copilotSession.AbortAsync(CancellationToken.None);
+                    throw;
+                }
+
+                if (response?.Data?.Content is not { Length: > 0 } content)
+                {
+                    throw new InvalidOperationException(
+                        "Copilot completed without returning an assistant message.");
+                }
+
+                await sessions.MarkInitializedAsync(
                     appSession.Id,
-                    error.Data.ErrorType,
-                    error.Data.Message,
-                    null);
-            }
-            else if (logger.IsEnabled(LogLevel.Debug))
-            {
-                LogCopilotEvent(
-                    logger,
-                    appSession.Id,
-                    sessionEvent.Type.ToString(),
-                    null);
-            }
-        });
+                    appSession.Version,
+                    CreateGeneratedTitle(appSession, prompt),
+                    operationToken);
 
-        AssistantMessageEvent? response;
-        try
-        {
-            response = await copilotSession.SendAndWaitAsync(
-                prompt,
-                options.Value.ResponseTimeout,
-                cancellationToken);
-        }
-        catch (Exception exception) when (exception is TimeoutException or OperationCanceledException)
-        {
-            await copilotSession.AbortAsync(CancellationToken.None);
-            throw;
-        }
-
-        if (response?.Data?.Content is not { Length: > 0 } content)
-        {
-            throw new InvalidOperationException("Copilot completed without returning an assistant message.");
-        }
-
-        await sessions.MarkInitializedAsync(
-            appSession.Id,
-            appSession.Version,
-            CancellationToken.None);
-
-        return content;
+                return content;
+            },
+            cancellationToken);
     }
 
     public async Task<IReadOnlyList<CopilotMessage>> GetHistoryAsync(
@@ -99,24 +124,75 @@ public sealed class CopilotSessionService(
             return [];
         }
 
-        using IDisposable sessionLock = await lockProvider.TryAcquireAsync(sessionId, cancellationToken);
-        CopilotClient client = await clientFactory.GetClientAsync(cancellationToken);
-        await using CopilotSession copilotSession =
-            await client.ResumeSessionAsync(appSession.Id, CreateResumeConfig(appSession), cancellationToken);
-        IReadOnlyList<SessionEvent> events = await copilotSession.GetEventsAsync(cancellationToken);
-        if (!appSession.IsInitialized)
-        {
-            await sessions.MarkInitializedAsync(
-                appSession.Id,
-                appSession.Version,
-                CancellationToken.None);
-        }
+        await using ISessionLockHandle sessionLock =
+            await lockProvider.TryAcquireAsync(sessionId, cancellationToken);
+        return await ExecuteWithLockAsync(
+            sessionId,
+            sessionLock,
+            async operationToken =>
+            {
+                appSession = await GetRequiredSessionUnderLockAsync(
+                    sessionId,
+                    sessionLock,
+                    operationToken);
+                CopilotClient client = await clientFactory.GetClientAsync(operationToken);
+                await using CopilotSession copilotSession =
+                    await client.ResumeSessionAsync(
+                        appSession.Id,
+                        CreateResumeConfig(appSession),
+                        operationToken);
+                IReadOnlyList<SessionEvent> events =
+                    await copilotSession.GetEventsAsync(operationToken);
+                CopilotMessage[] messages = events
+                    .Select(ToMessage)
+                    .Where(static message => message is not null)
+                    .Cast<CopilotMessage>()
+                    .ToArray();
+                string? generatedTitle = appSession.Title.Equals(
+                    DefaultSessionTitle,
+                    StringComparison.Ordinal)
+                        ? messages
+                            .FirstOrDefault(static message => message.Role == "user")
+                            is { Content: { Length: > 0 } firstPrompt }
+                                ? CreateGeneratedTitle(appSession, firstPrompt)
+                                : null
+                        : null;
 
-        return events
-            .Select(ToMessage)
-            .Where(static message => message is not null)
-            .Cast<CopilotMessage>()
-            .ToArray();
+                if (!appSession.IsInitialized || generatedTitle is not null)
+                {
+                    await sessions.MarkInitializedAsync(
+                        appSession.Id,
+                        appSession.Version,
+                        generatedTitle,
+                        cancellationToken: operationToken);
+                }
+
+                return messages;
+            },
+            cancellationToken);
+    }
+
+    private static async Task<T> ExecuteWithLockAsync<T>(
+        string sessionId,
+        ISessionLockHandle sessionLock,
+        Func<CancellationToken, Task<T>> operation,
+        CancellationToken callerToken)
+    {
+        using var operationCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                callerToken,
+                sessionLock.LockLost);
+        try
+        {
+            return await operation(operationCancellation.Token);
+        }
+        catch (OperationCanceledException)
+            when (sessionLock.LockLost.IsCancellationRequested
+                && !callerToken.IsCancellationRequested)
+        {
+            throw new IOException(
+                $"Distributed lock for session '{sessionId}' was lost.");
+        }
     }
 
     private SessionConfig CreateSessionConfig(AppSession appSession) => new()
@@ -144,6 +220,36 @@ public sealed class CopilotSessionService(
     {
         return await sessions.GetAsync(sessionId, cancellationToken)
             ?? throw new KeyNotFoundException($"Session '{sessionId}' was not found.");
+    }
+
+    private async Task<AppSession> GetRequiredSessionUnderLockAsync(
+        string sessionId,
+        ISessionLockHandle sessionLock,
+        CancellationToken cancellationToken)
+    {
+        AppSession? session = await sessions.GetAsync(sessionId, cancellationToken);
+        if (session is not null)
+        {
+            return session;
+        }
+
+        sessionLock.DeleteOnRelease();
+        throw new KeyNotFoundException($"Session '{sessionId}' was not found.");
+    }
+
+    private static string? CreateGeneratedTitle(AppSession session, string prompt)
+    {
+        if (!session.Title.Equals(DefaultSessionTitle, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        string compactTitle = string.Join(
+            ' ',
+            prompt.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return compactTitle.Length <= GeneratedTitleMaximumLength
+            ? compactTitle
+            : $"{compactTitle[..(GeneratedTitleMaximumLength - 3)]}...";
     }
 
     private static CopilotMessage? ToMessage(SessionEvent sessionEvent)

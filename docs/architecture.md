@@ -1,396 +1,319 @@
 # Architecture
 
-## 1. Purpose
+## 1. まず知っておくこと
 
-この document は、GitHub Copilot SDK を使う local Web application の state
-ownership、component boundary、session lifecycle、persistence、authentication
-を定義します。
+このアプリケーションは、GitHub Copilot SDK の会話を Web サーバーの外へ保存します。
+Web サーバーを再起動しても、保存済みの状態から会話を再開できます。
 
-PoC の目的は、ASP.NET Core process が active session を保持し続けなくても、
-persisted Copilot session を別 process から再開できることを確認することです。
+重要な設計判断は次の 5 点です。
 
-## 2. Design principles
+1. セッション一覧と会話本体を分けて保存する
+2. 会話本体は GitHub Copilot SDK の `SessionFsProvider` を通して保存する
+3. Web サーバーのメモリを正本にしない
+4. SQLite と Azure Storage を設定で切り替える
+5. Multi-node では Web node ごとに専用の Copilot runtime を持つ
 
-1. **Application state と agent state を分ける**
-   - Application は session metadata を管理する
-   - GitHub Copilot SDK は conversation と agent execution state を管理する
-2. **Copilot の内部状態を application model へ複製しない**
-   - Events、checkpoints、plan などは SessionFS contract のまま保存する
-3. **Web process を source of truth にしない**
-   - Active object と lock は一時的
-   - Restart 後は persisted state から復元する
-4. **Storage implementation を dependency injection で交換可能にする**
-   - PoC は SQLite
-   - 将来は SQL Server、Azure Cosmos DB、Azure Blob Storage を評価できる
-5. **Credential を browser と persistence layer へ渡さない**
+## 2. 実行モード
 
-## 3. System context
+| | SQLite mode | Azure Storage mode |
+| --- | --- | --- |
+| 主な用途 | ローカルでの再起動検証 | Multi-node の検証 |
+| Web node 数 | 1 | 1 以上 |
+| セッション一覧 | SQLite `app_sessions` | Azure Table Storage `appsessions` |
+| 会話と agent state | SQLite `session_fs_nodes` | Azure Blob Storage `state.json` |
+| Session lock | プロセス内 `SemaphoreSlim` | Azure Blob lease |
+| Artifact | なし | Azure Blob Storage の contract |
+
+`Persistence:Backend` に `Sqlite` または `AzureStorage` を指定して切り替えます。
+
+## 3. 全体構成
 
 ```mermaid
 flowchart LR
-    User[Local user]
-    Browser[React application]
-    Api[ASP.NET Core API]
-    CopilotSdk[GitHub Copilot SDK]
-    CopilotCli[GitHub Copilot CLI]
-    CopilotService[GitHub Copilot service]
-    Sqlite[(SQLite)]
+    Browser[React]
 
-    User --> Browser
-    Browser -->|HTTPS / JSON| Api
-    Api --> CopilotSdk
-    CopilotSdk -->|JSON-RPC| CopilotCli
-    CopilotCli -->|Authenticated request| CopilotService
-    Api -->|Application state| Sqlite
-    CopilotSdk -->|SessionFS callbacks| Api
-    Api -->|Agent state| Sqlite
-```
-
-React は Copilot service へ直接接続しません。Credential と SDK process lifecycle は
-ASP.NET Core backend の trust boundary 内に置きます。
-
-## 4. Container architecture
-
-```mermaid
-flowchart TB
-    subgraph Browser
-        React[React + TypeScript]
+    subgraph PairA[Node A]
+        WebA[ASP.NET Core]
+        RuntimeA[Copilot CLI runtime]
+        WebA -->|JSON-RPC| RuntimeA
     end
 
-    subgraph WebProcess[ASP.NET Core process]
-        Endpoints[Minimal API endpoints]
-        SessionService[CopilotSessionService]
-        AppRepo[IAppSessionRepository]
-        FsFactory[ISessionFsProviderFactory]
-        ClientFactory[ICopilotClientFactory]
-        SessionLock[Per-session request lock]
-
-        Endpoints --> SessionService
-        Endpoints --> AppRepo
-        SessionService --> ClientFactory
-        SessionService --> FsFactory
-        SessionService --> SessionLock
+    subgraph PairB[Node B]
+        WebB[ASP.NET Core]
+        RuntimeB[Copilot CLI runtime]
+        WebB -->|JSON-RPC| RuntimeB
     end
 
-    subgraph Persistence
-        AppStore[SqliteAppSessionRepository]
-        FsStore[SqliteSessionFsProvider]
-        Database[(SQLite database)]
-
-        AppStore -->|app_sessions| Database
-        FsStore -->|session_fs_nodes| Database
-    end
-
-    React -->|/api| Endpoints
-    AppRepo --> AppStore
-    FsFactory --> FsStore
+    Browser -->|HTTP or HTTPS| WebA
+    Browser -.->|HTTP or HTTPS| WebB
+    WebA --> Shared[(Azure Storage)]
+    WebB --> Shared
+    RuntimeA --> Copilot[GitHub Copilot service]
+    RuntimeB --> Copilot
 ```
 
-## 5. State ownership
+### Web node と Copilot runtime
 
-### 5.1 Application state
+Web node と headless GitHub Copilot CLI runtime は**別プロセス**です。
+Multi-node では 1:1 に対応させます。
 
-Application state は UI と request routing に必要な metadata だけです。
+同じ host や container group に配置できますが、network endpoint と lifecycle は
+分かれています。複数の Web node から 1 つの runtime を共有しません。単一 runtime
+への SessionFS provider の重複登録が拒否されるためです。
 
-```sql
-CREATE TABLE app_sessions (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    model TEXT NOT NULL,
-    is_initialized INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    version INTEGER NOT NULL DEFAULT 0
-);
-```
+Node 間で共有するのは runtime ではなく、Azure Storage に保存したデータです。
 
-`app_sessions` には conversation content、checkpoint、tool result、credential を
-保存しません。
+## 4. コンポーネント
 
-### 5.2 Agent state
+| Component | 役割 |
+| --- | --- |
+| React | Session の一覧、chat、SessionFS Inspector |
+| Minimal API | Request validation と HTTP response |
+| `CopilotSessionService` | Session の create / resume、message send、history read |
+| `ICopilotClientFactory` | Headless GitHub Copilot CLI への共有 connection |
+| `IAppSessionRepository` | UI に必要な session metadata |
+| `ISessionFsProviderFactory` | SDK が読み書きする virtual file system |
+| `ISessionLockProvider` | 同じ session の request を直列化 |
+| `ISessionFsDiagnosticsReader` | 保存状態の read-only inspection |
+| `IArtifactStore` | SessionFS と分離した binary Artifact storage |
 
-Agent state は SDK が SessionFS へ書く file tree です。
+具体的な implementation は composition root の `Program.cs` で選択します。
+Business flow は SQLite や Azure SDK の型へ直接依存しません。
 
-```sql
-CREATE TABLE session_fs_nodes (
-    session_id TEXT NOT NULL,
-    path TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('file', 'directory')),
-    content TEXT,
-    mode INTEGER,
-    birthtime TEXT NOT NULL,
-    mtime TEXT NOT NULL,
-    version INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (session_id, path)
-);
-```
+## 5. 取り扱うデータ
 
-想定される content:
+### 5.1 データの責任分担
 
-- `events.jsonl`
-- `workspace.yaml`
-- `checkpoints/index.md`
-- checkpoint files
-- `plan.md`
-- large tool output の temporary files
+| Data | 内容 | 管理者 |
+| --- | --- | --- |
+| Application metadata | ID、title、model、作成日時、初期化状態 | Application |
+| Agent state | Message events、checkpoint、plan、workspace | GitHub Copilot SDK |
+| Lock state | 同じ session の実行権 | Application |
+| Artifact | 完成した binary file と metadata | Application |
 
-この schema は SessionFS の実装詳細であり、Application service は直接 query
-しません。
+Application は Copilot の message event や checkpoint を独自 model に複製しません。
+SDK が SessionFS に書いた file tree をそのまま永続化します。
 
-### 5.3 Process-local state
+### 5.2 SQLite mode
 
-次の state は process 内だけに存在してよいものです。
+| Table | 内容 |
+| --- | --- |
+| `app_sessions` | Application metadata と更新競合を検出する `version` |
+| `session_fs_nodes` | Session ID と virtual path を key にした file / directory |
 
-- shared `CopilotClient` connection
-- request 中の `CopilotSession`
-- session ID ごとの `SemaphoreSlim`
-- cancellation token
+SQLite は WAL mode と bounded `busy_timeout` を使用します。Append、rename、
+recursive remove は transaction 内で実行します。
 
-これらが失われても persisted session は失われません。
+### 5.3 Azure Storage mode
 
-## 6. Session lifecycle
+| Data | Resource と key | 主な内容 |
+| --- | --- | --- |
+| Application metadata | Table `appsessions`; `PartitionKey=session`, `RowKey={sessionId}` | title、model、isInitialized、isDeleting、timestamps、version |
+| Agent state | Container `sessionfs`; `sessions/{sessionId}/state.json` | Snapshot version と SessionFS node dictionary |
+| Lock | Container `session-locks`; `sessions/{sessionId}.lock` | Empty Blob に設定した lease |
+| Artifact | Container `artifacts`; session / artifact / file ごとの Blob | Binary content、content type、SHA-256 |
 
-### 6.1 Create and first message
+`state.json` は session ごとの単一 snapshot です。`events.jsonl`、`workspace.yaml`、
+checkpoint、plan などは個別の Blob ではなく、snapshot 内の virtual node として
+保存します。
+
+この方式は実装が単純な一方、session が大きくなると snapshot 全体を更新するため
+write amplification が増えます。
+
+### 5.4 保存しないデータ
+
+- GitHub credential と `COPILOT_CONNECTION_TOKEN`
+- Active `CopilotClient` / `CopilotSession` object
+- Request の cancellation token
+- Lease renewal task
+- Browser authentication state
+- Node-local `~/.copilot/session-state` の file tree
+
+Azure への接続は、Azurite などで connection string を明示する場合を除き、
+`DefaultAzureCredential` を使用します。
+
+## 6. 1 回の message request
 
 ```mermaid
 sequenceDiagram
     participant UI as React
-    participant API as ASP.NET Core
-    participant AppDB as app_sessions
-    participant SDK as Copilot SDK
-    participant FS as SqliteSessionFsProvider
-    participant AgentDB as session_fs_nodes
+    participant Web as ASP.NET Core
+    participant Lock as Session lock
+    participant Meta as Metadata store
+    participant Runtime as Copilot runtime
+    participant State as SessionFS store
 
-    UI->>API: POST /api/sessions
-    API->>AppDB: Insert metadata
-    API-->>UI: sessionId
-
-    UI->>API: POST /api/sessions/{id}/messages
-    API->>AppDB: Read is_initialized=false
-    API->>SDK: CreateSessionAsync(sessionId)
-    SDK->>FS: SessionFS operations
-    FS->>AgentDB: Transactional writes
-    SDK-->>API: Assistant response
-    API->>SDK: Dispose session
-    API->>AppDB: Mark initialized
-    API-->>UI: Response
+    UI->>Web: Send message
+    Web->>Meta: Read session metadata
+    Web->>Lock: Acquire
+    Web->>Runtime: Create or resume session
+    Runtime->>State: Read and write SessionFS
+    Runtime-->>Web: Assistant response
+    Web->>Meta: Mark initialized
+    Web->>Lock: Release
+    Web-->>UI: Return response
 ```
 
-Metadata row の作成と agent session の初期化は別 operation です。初期化が失敗した
-場合は `is_initialized` を true にせず、成功したように見せません。
+初回は SDK session を create し、保存済み state があれば resume します。
+処理の終了後は `CopilotSession` を dispose します。次の request では新しい
+`CopilotSession` を保存済み state から作り直します。
 
-### 6.2 Resume
+Resume に失敗した場合、暗黙に新しい session を作る fallback は行いません。
+会話の欠損や破損を隠さないためです。
 
-```mermaid
-sequenceDiagram
-    participant UI as React
-    participant API as New ASP.NET Core process
-    participant AppDB as app_sessions
-    participant SDK as New CopilotClient
-    participant FS as New SqliteSessionFsProvider
-    participant AgentDB as session_fs_nodes
+## 7. Multi-node を実現する仕組み
 
-    UI->>API: POST /api/sessions/{id}/messages
-    API->>AppDB: Read initialized session
-    API->>API: Acquire session lock
-    API->>SDK: ResumeSessionAsync(sessionId)
-    SDK->>FS: Read persisted SessionFS paths
-    FS->>AgentDB: Query agent state
-    SDK-->>API: Resumed session
-    API->>SDK: SendAndWaitAsync(prompt)
-    SDK->>FS: Append/update persisted state
-    SDK-->>API: Assistant response
-    API->>SDK: Dispose session
-    API->>API: Release lock
-    API-->>UI: Response
-```
+### 7.1 Node ごとに runtime を分離
 
-Resume failure を catch して暗黙に new session を作る fallback は設けません。
-Missing state、corruption、authentication failure を区別して surface します。
+各 Web node は専用の Copilot runtime に接続します。Copilot runtime を共有せず、
+Azure Table Storage と Azure Blob Storage だけを共有します。
 
-## 7. SessionFS provider contract
+### 7.2 Azure Blob lease で同時実行を防止
 
-`SqliteSessionFsProvider` は `GitHub.Copilot.SessionFsProvider` を継承し、次を実装します。
+Message send、history read、SDK session の create / resume、delete の前に、
+session ID ごとの Blob lease を取得します。
 
-| Operation | SQLite behavior |
+- Lease duration: 60 秒
+- Renewal interval: 20 秒
+- 取得済みの session へ別 node がアクセスした場合: HTTP 409
+- Renewal を確認できない場合: 実行中 operation を cancel
+
+SQLite mode では同じ役割をプロセス内の `SemaphoreSlim` が担います。
+
+### 7.3 ETag で書き込み競合を検出
+
+SessionFS の更新は次の read-modify-write です。
+
+1. `state.json` と ETag を読む
+2. Memory 上の snapshot に SDK の変更を適用する
+3. `If-Match` 付きで snapshot を upload する
+4. 競合した場合は最新 snapshot を読み直して変更を再適用する
+
+初回作成には `If-None-Match: *` を使います。Retry 回数は
+`AzureStorage:MaximumWriteAttempts` で制限します。
+
+Azure Table Storage の metadata update も entity ETag と application-level
+`version` の両方を確認します。
+
+Blob lease が通常の同時実行を防ぎ、ETag が予期しない競合や lease 喪失時の追加防御に
+なります。ただし fencing token は未実装です。
+
+### 7.4 初期化途中からの回復
+
+First message の途中で失敗すると、SessionFS は存在するが metadata の
+`isInitialized` が false の場合があります。
+
+次回 request は `isInitialized` だけでなく SessionFS の存在も確認します。State が
+存在すれば create ではなく resume を選び、既存の会話を上書きしません。
+
+### 7.5 Delete
+
+Azure Table Storage、SessionFS Blob、Artifact Blob をまたぐ distributed transaction
+はありません。
+
+Delete は次の順序で行います。
+
+1. Table entity を `isDeleting=true` にする
+2. SessionFS Blob を削除する
+3. Artifact Blob を削除する
+4. Table entity を削除する
+
+`isDeleting` の entity は通常の list / get から隠します。途中で失敗した場合は delete
+を再実行し、残りの cleanup を継続できます。
+
+## 8. Session lifecycle
+
+| Operation | Behavior |
 | --- | --- |
-| Read file | Session/path key で content を取得 |
-| Write file | Parent を検証して UPSERT |
-| Append file | Transaction 内で atomic append |
-| Exists | Node existence check |
-| Stat | Type、size、timestamp を返す |
-| Make directory | Recursive ancestor creation |
-| Read directory | Direct children のみ列挙 |
-| Read directory with types | Direct children と file/directory type を返す |
-| Remove | File または directory subtree を transaction で削除 |
-| Rename | Node と descendants の path を transaction で更新 |
+| Create metadata | ID、title、model を保存する。Copilot session はまだ作らない |
+| First message | Lock を取得し、Copilot session と SessionFS state を作る |
+| Get history | Lock を取得し、保存済み session を resume して events を読む |
+| Next message | Lock を取得し、resume 後に message を送る |
+| Delete | Lock を取得し、agent state と application metadata を削除する |
 
-### Path rules
+Web process 内に残るのは共有 `CopilotClient` connection と request 中の
+`CopilotSession` だけです。これらが失われても保存済み session は失われません。
 
-- POSIX convention
-- Root は `/`
-- `..`、NUL、backslash、root 外参照、empty segment を拒否
-- Provider instance は constructor で固定した session ID の row だけを操作
-- Missing file は `FileNotFoundException`
-- Missing directory は `DirectoryNotFoundException`
-- SDK base class が missing path を `SessionFsErrorCode.ENOENT` に変換
+## 9. Failure behavior
 
-### Important distinction
-
-SQLite は SessionFS file tree の backing store として使います。
-
-SDK の `ISessionFsSqliteProvider` は agent の SQL tool と todo tracking を提供する
-optional extension であり、今回の provider persistence とは別機能です。この PoC
-では `SessionFsConfig.Capabilities.Sqlite` を有効化しません。
-
-## 8. SQLite behavior
-
-Startup:
-
-- `PRAGMA journal_mode = WAL`
-- `PRAGMA foreign_keys = ON`
-- Bounded `busy_timeout`
-- Schema version check
-- Idempotent migration
-
-Writes:
-
-- Explicit transaction
-- Append、recursive remove、rename は atomic
-- `version` を使って application metadata の lost update を検出
-- Busy retry は上限を持ち、exhaustion は service unavailable として返す
-
-The database file、`-wal`、`-shm`、backup は source control へ含めません。
-
-## 9. Dependency injection boundaries
-
-```csharp
-builder.Services.AddSingleton<ISqliteConnectionFactory, SqliteConnectionFactory>();
-builder.Services.AddScoped<IAppSessionRepository, SqliteAppSessionRepository>();
-builder.Services.AddSingleton<ISessionFsProviderFactory, SqliteSessionFsProviderFactory>();
-builder.Services.AddSingleton<ICopilotClientFactory, CopilotClientFactory>();
-builder.Services.AddScoped<CopilotSessionService>();
-```
-
-### Future replacements
-
-| Interface | Current | Possible future |
-| --- | --- | --- |
-| `IAppSessionRepository` | SQLite | SQL Server、Azure Cosmos DB |
-| `ISessionFsProviderFactory` | SQLite | Azure Blob Storage、Azure Cosmos DB |
-| `ICopilotClientFactory` | External local headless CLI | Hosted runtime connection |
-
-Backend 固有 query や client type を `CopilotSessionService` と API contract へ漏らしません。
-
-## 10. API boundary
-
-| Method | Path | Responsibility |
-| --- | --- | --- |
-| `GET` | `/api/sessions` | Session metadata 一覧 |
-| `POST` | `/api/sessions` | Session metadata と ID の作成 |
-| `GET` | `/api/sessions/{id}` | Metadata と SDK events の取得 |
-| `POST` | `/api/sessions/{id}/messages` | Create または resume、message 送信 |
-| `DELETE` | `/api/sessions/{id}` | Agent state と app metadata の削除 |
-| `GET` | `/api/sessions/{id}/diagnostics` | SQLite-backed SessionFS の保存 evidence と virtual tree |
-| `GET` | `/api/sessions/{id}/diagnostics/entry` | 指定 SessionFS row の制限付き content preview |
-| `GET` | `/api/health` | Application、SQLite、Copilot CLI health |
-
-API は typed request/response と Problem Details を使います。
-
-- Invalid input: 400
-- Unknown session: 404
-- Concurrent use/version conflict: 409
-- SQLite busy after bounded retry: 503
-- Copilot authentication unavailable: 503
-- Unexpected persistence failure: 500
-
-Persistence failure を成功 response に変換しません。
-
-## 11. Authentication and trust boundaries
-
-### Local PoC
-
-1. Sign in 済み GitHub Copilot CLI credential
-2. Optional `COPILOT_GITHUB_TOKEN`
-3. `GH_TOKEN` / `GITHUB_TOKEN` fallback
-
-Headless CLI process が authentication を管理し、ASP.NET Core は
-`RuntimeConnection.ForUri` で接続します。`COPILOT_CONNECTION_TOKEN` が設定されている
-場合は同じ値を両 process で使用し、local runtime connection を認証します。
-
-### Rules
-
-- Token は server process のみが扱う
-- Token を React、SQLite、API payload、log に渡さない
-- Token を repository、`appsettings.json`、sample `.env` に書かない
-- Public CI では authenticated Copilot E2E を実行しない
-- Browser-based GitHub OAuth は scope 外
-
-## 12. Concurrency
-
-SDK は同じ session への concurrent access を lock しません。
-
-PoC は session ID ごとの in-process lock で request を直列化します。Web process
-再起動で lock は失われますが、single process local PoC では問題になりません。
-
-Multi-instance 化する場合は distributed lock と fencing が必要です。SQLite file
-sharing や in-process lock を production scale の解決策として扱いません。
-
-## 13. Failure scenarios
-
-| Failure | Expected behavior |
+| Failure | Behavior |
 | --- | --- |
-| Copilot CLI 未ログイン | Health と message API が認証 error を返す |
-| SQLite file がない | Startup migration で新規作成 |
-| Session metadata のみ存在 | 未初期化として明示し、first message で create |
-| Agent state が欠損 | Resume failure。新規 session へ暗黙 fallback しない |
-| SQLite busy | Bounded retry 後に 503 |
-| Same session concurrent request | 409 |
-| Backend process termination | 次 process が persisted state から resume |
-| Invalid SessionFS path | Storage request 前に拒否 |
+| Copilot CLI に到達できない | Message API と health API が 503 |
+| Copilot CLI が未認証 | Message API が authentication error |
+| Session が存在しない | 404 |
+| 同じ session を別 request が使用中 | 409 |
+| Metadata の version / ETag conflict | 409 |
+| SQLite busy timeout | 503 |
+| Azure Blob lease を喪失 | Operation を cancel して failure を返す |
+| SessionFS state が欠損または破損 | Resume failure。新規 session へ fallback しない |
 
-## 14. Validation
+`/api/health` が確認するのは、選択中の persistence backend 名と Copilot CLI の
+TCP 到達性です。Copilot の authentication や storage data plane の正常性までは
+確認しません。
 
-### Contract tests
+## 10. Security boundary
 
-- File create/read/overwrite/append
-- Directory create/list/stat
-- Typed direct-child listing
+- React は GitHub Copilot service や Azure Storage へ直接接続しない
+- Azure Container Apps の public ingress は built-in authentication で保護する
+- User sign-in には Microsoft Entra ID の既存 application registration を使用する
+- 認証済みrequestも明示したprincipal Object IDのallow-listで制限する
+- Headless GitHub Copilot CLI が Copilot authentication を管理する
+- `COPILOT_CONNECTION_TOKEN` は Web と CLI の接続にだけ使用する
+- Token を browser、storage、API payload、log に保存しない
+- `CopilotClientMode.Empty` と空の `AvailableTools` を使用する
+- `/api/health` は Container Apps probe のため user sign-in の対象外とする
+
+Local 実行には user authentication を適用しません。Microsoft Entra ID sign-in は
+Azure Container Apps deployment にだけ構成します。
+
+## 11. 現在の制約
+
+- Artifact store は contract と cleanup までで、Web API には未配線
+- Azure Storage mode はMulti-node semanticsの検証用で、production-grade運用は対象外
+- 複数user向けのsession ownershipとapplication role authorizationは未実装
+- SessionFS は単一 JSON Blob のため large session で write amplification が発生
+- Blob lease に fencing token がない
+- Multi-region scaling、backup、retention、encryption policy は対象外
+- SQL Server と Azure Cosmos DB は未実装
+
+検証条件と結果は [Validation](validation.md) を参照してください。
+
+## Appendix A. Implementation mapping
+
+| Interface | SQLite mode | Azure Storage mode |
+| --- | --- | --- |
+| `IAppSessionRepository` | `SqliteAppSessionRepository` | `AzureTableAppSessionRepository` |
+| `ISessionFsProviderFactory` | `SqliteSessionFsProviderFactory` | `AzureBlobSessionFsProviderFactory` |
+| `ISessionLockProvider` | `SessionLockProvider` | `AzureBlobSessionLockProvider` |
+| `ISessionFsDiagnosticsReader` | `SqliteSessionFsDiagnosticsReader` | `AzureBlobSessionFsDiagnosticsReader` |
+| `IArtifactStore` | なし | `AzureBlobArtifactStore` |
+
+`ICopilotClientFactory` は両 mode で `CopilotClientFactory` を使用します。
+
+## Appendix B. API
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/sessions` | Session 一覧 |
+| `POST` | `/api/sessions` | Session metadata の作成 |
+| `GET` | `/api/sessions/{id}` | Metadata と message history |
+| `POST` | `/api/sessions/{id}/messages` | Message send |
+| `DELETE` | `/api/sessions/{id}` | Session の削除 |
+| `GET` | `/api/sessions/{id}/diagnostics` | SessionFS の概要 |
+| `GET` | `/api/sessions/{id}/diagnostics/entry` | SessionFS node の preview |
+| `GET` | `/api/health` | Copilot CLI の TCP 到達性 |
+
+## Appendix C. SessionFS contract
+
+SQLite と Azure Blob Storage の provider は同じ operation を実装します。
+
+- File read、write、append、exists、stat
+- Directory create、list、typed list
 - Recursive remove
-- File/directory subtree rename
-- Root behavior
-- ENOENT mapping
-- Path traversal rejection
-- Session isolation
-- New provider instance reads existing state
+- File / directory subtree rename
 
-### Restart E2E
+Path は POSIX convention を使います。Root は `/` です。`..`、NUL、backslash、
+root 外参照、empty segment は storage access 前に拒否します。
 
-1. React から session と first message を作成
-2. `session_fs_nodes` に SDK state が保存されたことを確認
-3. Backend process を停止
-4. 同じ SQLite database で新しい backend process を起動
-5. React を reload
-6. Existing session を選択
-7. Previous context に依存する follow-up prompt を送信
-8. Correct response と追加 events の persistence を確認
-
-## 15. Scope boundaries
-
-Included:
-
-- React + ASP.NET Core local application
-- SQLite application state
-- SQLite-backed custom SessionFS
-- Create、dispose、resume
-- Restart validation
-- DI replacement boundaries
-
-Not included:
-
-- Azure deployment
-- SQL Server、Azure Cosmos DB、Azure Blob Storage implementation
-- `ISessionFsSqliteProvider`
-- OAuth / multi-user authorization
-- Distributed lock
-- Production backup、retention、encryption
+SDK の `ISessionFsSqliteProvider` は agent の SQL tool を提供する別機能です。
+この repository の SQLite-backed `SessionFsProvider` とは関係ありません。
