@@ -2,6 +2,7 @@ using Azure.Identity;
 using CopilotSessionPersistencePoc.AppState;
 using CopilotSessionPersistencePoc.ArtifactStorage;
 using CopilotSessionPersistencePoc.Copilot;
+using CopilotSessionPersistencePoc.Execution;
 using CopilotSessionPersistencePoc.Persistence;
 using CopilotSessionPersistencePoc.SessionFs;
 using GitHub.Copilot.Rpc;
@@ -25,7 +26,10 @@ public sealed class AzureStorageMultiNodeIntegrationTests
                 ConnectionString = "UseDevelopmentStorage=true",
             });
         var clients = new AzureStorageClients(options, new DefaultAzureCredential());
-        var store = new AzureBlobArtifactStore(clients, options);
+        var store = new AzureBlobArtifactStore(
+            clients,
+            new TestSessionOwnerContext("path-test-user"),
+            options);
 
         await Assert.ThrowsAsync<ArgumentException>(
             () => store.PutAsync(
@@ -56,6 +60,7 @@ public sealed class AzureStorageMultiNodeIntegrationTests
                 SessionLocksContainer = $"locks-{suffix}",
                 ArtifactsContainer = $"artifacts-{suffix}",
                 AppSessionsTable = $"appsessions{suffix}",
+                ExecutionJobsTable = $"executionjobs{suffix}",
             });
         var clients = new AzureStorageClients(options, new DefaultAzureCredential());
         var initializer = new AzureStorageInitializer(clients, options);
@@ -109,18 +114,24 @@ public sealed class AzureStorageMultiNodeIntegrationTests
             }
 
             var sharedOwner = new TestSessionOwnerContext("shared-user");
+            var sharedJobs = new AzureTableExecutionJobRepository(
+                clients,
+                sharedOwner,
+                options);
             var repositoryA =
                 new AzureTableAppSessionRepository(
                     clients,
                     nodeAStore,
-                    new AzureBlobArtifactStore(clients, options),
+                    new AzureBlobArtifactStore(clients, sharedOwner, options),
+                    sharedJobs,
                     sharedOwner,
                     options);
             var repositoryB =
                 new AzureTableAppSessionRepository(
                     clients,
                     nodeBStore,
-                    new AzureBlobArtifactStore(clients, options),
+                    new AzureBlobArtifactStore(clients, sharedOwner, options),
+                    sharedJobs,
                     sharedOwner,
                     options);
             AppSession created = await repositoryA.CreateAsync(
@@ -140,12 +151,17 @@ public sealed class AzureStorageMultiNodeIntegrationTests
                 (await repositoryA.GetAsync("shared-session"))!.Title);
             Assert.Equal(1, initialized.Version);
 
+            var otherOwner = new TestSessionOwnerContext("different-user");
             var otherOwnerRepository =
                 new AzureTableAppSessionRepository(
                     clients,
                     nodeBStore,
-                    new AzureBlobArtifactStore(clients, options),
-                    new TestSessionOwnerContext("different-user"),
+                    new AzureBlobArtifactStore(clients, otherOwner, options),
+                    new AzureTableExecutionJobRepository(
+                        clients,
+                        otherOwner,
+                        options),
+                    otherOwner,
                     options);
             Assert.Empty(await otherOwnerRepository.ListAsync());
             Assert.Null(await otherOwnerRepository.GetAsync("shared-session"));
@@ -173,8 +189,14 @@ public sealed class AzureStorageMultiNodeIntegrationTests
             await repositoryB.DeleteAsync("deletion-retry-session");
             Assert.False(await repositoryA.ExistsForDeletionAsync("deletion-retry-session"));
 
-            var artifactA = new AzureBlobArtifactStore(clients, options);
-            var artifactB = new AzureBlobArtifactStore(clients, options);
+            var artifactA = new AzureBlobArtifactStore(
+                clients,
+                sharedOwner,
+                options);
+            var artifactB = new AzureBlobArtifactStore(
+                clients,
+                sharedOwner,
+                options);
             ArtifactInfo uploaded = await artifactA.PutAsync(
                 "shared-session",
                 "report-001",
@@ -195,6 +217,47 @@ public sealed class AzureStorageMultiNodeIntegrationTests
                 "application/octet-stream",
                 BinaryData.FromString("# Shared artifact\n"));
             Assert.Equal("text/markdown", idempotent.ContentType);
+            var otherOwnerArtifacts = new AzureBlobArtifactStore(
+                clients,
+                otherOwner,
+                options);
+            Assert.Empty(await otherOwnerArtifacts.ListAsync("shared-session"));
+            Assert.Null(await otherOwnerArtifacts.GetAsync(
+                "shared-session",
+                "report-001",
+                "summary.md"));
+
+            ExecutionJobReservation jobA = await sharedJobs.GetOrCreateAsync(
+                "shared-session",
+                "tool-call-001",
+                "code-hash",
+                default);
+            ExecutionJobReservation jobB = await sharedJobs.GetOrCreateAsync(
+                "shared-session",
+                "tool-call-001",
+                "code-hash",
+                default);
+            Assert.True(jobA.Created);
+            Assert.False(jobB.Created);
+            Assert.Equal(jobA.Job.JobId, jobB.Job.JobId);
+            ExecutionJob completed = await sharedJobs.UpdateAsync(
+                jobA.Job,
+                ExecutionJobStatus.Succeeded,
+                "complete",
+                string.Empty,
+                null,
+                "[]",
+                default);
+            Assert.Equal(ExecutionJobStatus.Succeeded, completed.Status);
+            await Assert.ThrowsAsync<ExecutionJobConcurrencyException>(
+                () => sharedJobs.UpdateAsync(
+                    jobB.Job,
+                    ExecutionJobStatus.Failed,
+                    null,
+                    null,
+                    "stale waiter",
+                    null,
+                    default));
 
             var lockA = new AzureBlobSessionLockProvider(
                 clients,
@@ -232,6 +295,16 @@ public sealed class AzureStorageMultiNodeIntegrationTests
                 "shared-session",
                 "report-001",
                 "summary.md"));
+            var jobRows = new List<AzureTableExecutionJobRepository.ExecutionJobEntity>();
+            await foreach (var entity in clients.TableService
+                .GetTableClient(options.Value.ExecutionJobsTable)
+                .QueryAsync<AzureTableExecutionJobRepository.ExecutionJobEntity>(
+                    entity => entity.PartitionKey == sharedOwner.OwnerKey
+                        && entity.SessionId == "shared-session"))
+            {
+                jobRows.Add(entity);
+            }
+            Assert.Empty(jobRows);
         }
         finally
         {
@@ -247,6 +320,9 @@ public sealed class AzureStorageMultiNodeIntegrationTests
                 .DeleteIfExistsAsync();
             await clients.TableService
                 .GetTableClient(value.AppSessionsTable)
+                .DeleteAsync();
+            await clients.TableService
+                .GetTableClient(value.ExecutionJobsTable)
                 .DeleteAsync();
         }
     }

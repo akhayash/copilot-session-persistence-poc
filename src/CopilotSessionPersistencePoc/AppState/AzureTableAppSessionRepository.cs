@@ -1,6 +1,7 @@
 using Azure;
 using Azure.Data.Tables;
 using CopilotSessionPersistencePoc.ArtifactStorage;
+using CopilotSessionPersistencePoc.Execution;
 using CopilotSessionPersistencePoc.Persistence;
 using CopilotSessionPersistencePoc.SessionFs;
 using Microsoft.Extensions.Options;
@@ -11,6 +12,7 @@ public sealed class AzureTableAppSessionRepository(
     AzureStorageClients clients,
     AzureBlobSessionFsStore sessionFsStore,
     IArtifactStore artifactStore,
+    IExecutionJobRepository executionJobs,
     ISessionOwnerContext ownerContext,
     IOptions<AzureStorageOptions> options)
     : IAppSessionRepository
@@ -151,6 +153,7 @@ public sealed class AzureTableAppSessionRepository(
 
         await sessionFsStore.DeleteAsync(id, cancellationToken).ConfigureAwait(false);
         await artifactStore.DeleteSessionAsync(id, cancellationToken).ConfigureAwait(false);
+        await executionJobs.DeleteSessionAsync(id, cancellationToken).ConfigureAwait(false);
         await table.DeleteEntityAsync(ownerContext.OwnerKey, id, ETag.All, cancellationToken)
             .ConfigureAwait(false);
     }

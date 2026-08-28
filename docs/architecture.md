@@ -142,6 +142,37 @@ Metadata lookupをowner keyで制限するため、別userはsession一覧、his
 delete、diagnosticsへ到達できません。Local SQLite modeでは`local-user`をownerとして
 使用します。
 
+### 5.6 Python code実行とdynamic sessionのworkspace
+
+Agentが生成したPython codeは、Azure Container Apps dynamic sessions
+（`Microsoft.App/sessionPools`、`PythonLTS` built-in container）で実行します。
+SessionFS、Artifact Blobとは別のstorage領域です。
+
+| Data | 保存先 | 永続性 |
+| --- | --- | --- |
+| SessionFS（会話とagent state） | SQLite / Azure Blob Storage | Session削除まで永続 |
+| Dynamic sessionのsandbox workspace | Azure Container Apps dynamic session（Microsoft管理） | 実行中だけ存在。Session poolのcooldown後に破棄され、実行間で共有しない |
+| Artifact | Azure Blob Storage | Session削除まで永続 |
+| 実行ジョブの状態 | Azure Table Storage `executionjobs` | Application管理。Job単位のstatus、timestampを記録 |
+
+Dynamic sessionはpool単位でdynamic pool managementを使用し、Timed lifecycleで
+idle sandboxをcooldown period後に回収します。`readySessionInstances`を0にすると
+pre-warmされたsandboxを持たないためidle costを抑えられますが、初回実行に
+cold start latencyが発生します。
+
+制約:
+
+- 1回のcode実行は built-in code interpreter の上限である最大220秒
+- Session poolの`sessionNetworkConfiguration`は`EgressDisabled`。Sandbox内の
+  codeはinternetを含む外部networkへ到達できない
+- Sandbox containerにはAzure Storageのcredentialを一切渡さない。生成された
+  codeがSessionFSやArtifact Blobへ直接アクセスすることはできない
+- Data-plane APIは現時点で`2025-10-02-preview`のpreview API versionを使用する
+- Web identityにはsession poolだけへscopeしたbuilt-in
+  `Azure ContainerApps Session Executor`ロールのみを付与し、`Contributor`のような
+  広いroleは使用しない（least privilege）
+- Azure上でのlive validationは未実施（[Validation](validation.md)を参照）
+
 ## 6. 1 回の message request
 
 ```mermaid
@@ -288,6 +319,9 @@ Azure Container Apps deployment にだけ構成します。
 - Blob lease に fencing token がない
 - Multi-region scaling、backup、retention、encryption policy は対象外
 - SQL Server と Azure Cosmos DB は未実装
+- Python code実行（dynamic sessions）は1回の実行が最大220秒、poolのegressは無効、
+  sandboxにStorage credentialを渡さない設計。Data-plane APIは`2025-10-02-preview`の
+  previewであり、Azure上でのlive validationは未実施
 
 検証条件と結果は [Validation](validation.md) を参照してください。
 

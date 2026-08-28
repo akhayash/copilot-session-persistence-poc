@@ -28,6 +28,26 @@ React + ASP.NET Core アプリケーションです。
 2つのmodeは排他的です。`Persistence:Backend`を起動時に一度だけ評価し、SQLite一式
 またはAzure Storage一式のどちらかだけをdependency injectionへ登録します。
 
+## Python code実行と3つのstorageの違い
+
+Agentが生成したPython codeは、SessionFSやArtifactとは別のAzure Container Apps
+dynamic sessions（`PythonLTS`built-in container）で実行します。3つの保存領域は
+役割が異なります。
+
+| | SessionFS | Dynamic sessionのsandbox workspace | Artifact Blob |
+| --- | --- | --- | --- |
+| 内容 | 会話とagent stateのvirtual file system | Python実行中だけ存在するephemeralなfile system | 完成したbinary成果物 |
+| 永続性 | Session削除まで永続 | Session poolのcooldown後に破棄。実行間で共有しない | Session削除まで永続 |
+| 保存先 | SQLite / Azure Blob Storage | Azure Container Apps dynamic session（Microsoft管理、非永続） | Azure Blob Storage |
+| Credential | Application managed identityが管理 | Sandbox containerにはStorage credentialを渡さない | Application managed identityが管理 |
+
+Dynamic sessionはEgress無効（外部networkへ到達不可）で動作し、1回のcode実行は
+built-in code interpreterの上限である最大220秒です。Data-plane APIは現時点で
+`2025-10-02-preview`のpreview API versionを使用します。詳細は
+[Architecture](docs/architecture.md)と
+[Azure Container Apps deployment](infra/container-apps/README.md#python-dynamic-session-pool)
+を参照してください。この構成のAzure上でのlive validationは未実施です。
+
 Azure Storage mode では、各 Web node が専用の headless GitHub Copilot CLI runtime
 に接続します。Web node と runtime は別プロセスの 1:1 pair です。共有するのは
 runtime ではなく、Azure Storage に保存したデータです。
@@ -204,6 +224,8 @@ dotnet test CopilotSessionPersistencePoc.slnx `
 - Azure Blob lease による session lock
 - SQLite / Azure Blob Storage の diagnostics
 - Azure Blob Storage の Artifact store contract
+- Azure Container Apps dynamic sessions（`PythonLTS`）によるPython code実行と、Azure
+  Table Storage `executionjobs` での実行ジョブ状態管理
 
 対象外:
 
@@ -211,6 +233,11 @@ dotnet test CopilotSessionPersistencePoc.slnx `
 - Artifact の Web API と conversation metadata への組み込み
 - Production-grade fencing、multi-region scaling、backup、retention
 - SQL Server / Azure Cosmos DB implementation
+
+Python code実行のinfrastructure（session pool、role assignment、environment
+variable配線）はdeployment可能ですが、Azure上でのlive validationは未実施です。現在の
+data-plane API version（`2025-10-02-preview`）はpreviewであり、将来変更される可能性が
+あります。検証状況は [Validation](docs/validation.md) を参照してください。
 
 ## Security
 

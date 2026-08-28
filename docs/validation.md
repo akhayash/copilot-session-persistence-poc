@@ -148,3 +148,22 @@ Final templateはprincipal allow-listを設定せず、application registration�
 userをauthentication対象にしています。2026-08-28のlive testはsign-in redirectの確認であり、
 interactive browser E2Eは未実施です。Application-level isolationは
 `X-MS-CLIENT-PRINCIPAL-ID`をowner keyにしたAPI contract testで検証します。
+
+## 7. Python code実行（dynamic sessions）
+
+BicepはPython code実行用に`Microsoft.App/sessionPools`（`PythonLTS`built-in
+container、dynamic pool management、`EgressDisabled`）とAzure Table Storage
+`executionjobs`を追加しました。設計上の制約は次のとおりです。
+
+- 1回のcode実行は built-in code interpreter の上限である最大220秒
+- Session poolのnetworkは`EgressDisabled`。Sandbox内のcodeは外部networkへ到達できない
+- Sandbox containerにはAzure Storageのcredentialを渡さない。SessionFSやArtifact
+  Blobへの直接アクセスはできない
+- Data-plane APIは現時点で`2025-10-02-preview`のpreview API versionを使用する
+- Web identityにはsession poolへscopeしたbuilt-in
+  `Azure ContainerApps Session Executor`ロールのみを付与する
+
+**この構成のAzure上でのlive validationは未実施です。** Session pool、role
+assignment、environment variableの配線はBicep buildで構文検証済みですが、実際の
+Azure subscriptionへのdeployment、code実行のsmoke test、cold start latencyの計測は
+まだ行っていません。実施後は本sectionに条件と結果を追記します。

@@ -1,9 +1,12 @@
 using CopilotSessionPersistencePoc.AppState;
+using CopilotSessionPersistencePoc.ArtifactStorage;
 using CopilotSessionPersistencePoc.Copilot;
 using CopilotSessionPersistencePoc.Diagnostics;
+using CopilotSessionPersistencePoc.Execution;
 using CopilotSessionPersistencePoc.Persistence;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using Microsoft.Net.Http.Headers;
 using System.Net.Sockets;
 
 namespace CopilotSessionPersistencePoc.Api;
@@ -12,6 +15,7 @@ public static class SessionEndpoints
 {
     private const int MaxTitleLength = 120;
     private const int MaxPromptLength = 16_000;
+    private const int MaxArtifactUploadBytes = 10 * 1024 * 1024;
 
     public static IEndpointRouteBuilder MapSessionEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -24,6 +28,11 @@ public static class SessionEndpoints
         api.MapDelete("/sessions/{id}", DeleteSessionAsync);
         api.MapGet("/sessions/{id}/diagnostics", GetDiagnosticsAsync);
         api.MapGet("/sessions/{id}/diagnostics/entry", GetDiagnosticEntryAsync);
+        api.MapGet("/sessions/{id}/artifacts", ListArtifactsAsync);
+        api.MapPost("/sessions/{id}/artifacts", UploadArtifactAsync);
+        api.MapGet(
+            "/sessions/{id}/artifacts/{artifactId}/{fileName}",
+            DownloadArtifactAsync);
         api.MapGet("/health", GetHealth);
 
         return endpoints;
@@ -265,9 +274,157 @@ public static class SessionEndpoints
         }
     }
 
+    private static async Task<IResult> ListArtifactsAsync(
+        string id,
+        IAppSessionRepository repository,
+        IArtifactStore artifacts,
+        IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        if (await repository.GetAsync(id, cancellationToken) is null)
+        {
+            return Results.NotFound();
+        }
+
+        try
+        {
+            IReadOnlyList<ArtifactInfo> items =
+                await artifacts.ListAsync(id, cancellationToken);
+            IReadOnlyList<ArtifactInfo> published = await FilterPublishedArtifactsAsync(
+                id,
+                items,
+                services.GetService<IExecutionJobRepository>(),
+                cancellationToken);
+            return Results.Ok(published.Select(ArtifactResponse.From));
+        }
+        catch (ArtifactStorageUnavailableException exception)
+        {
+            return ArtifactUnavailable(exception);
+        }
+    }
+
+    private static async Task<IResult> UploadArtifactAsync(
+        string id,
+        string fileName,
+        HttpRequest request,
+        IAppSessionRepository repository,
+        IArtifactStore artifacts,
+        CancellationToken cancellationToken)
+    {
+        if (await repository.GetAsync(id, cancellationToken) is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return ValidationProblem(nameof(fileName), "A file name is required.");
+        }
+
+        if (request.ContentLength is > MaxArtifactUploadBytes)
+        {
+            return Results.Problem(
+                title: "Artifact is too large",
+                detail: $"Artifact uploads must not exceed {MaxArtifactUploadBytes} bytes.",
+                statusCode: StatusCodes.Status413PayloadTooLarge);
+        }
+
+        try
+        {
+            string contentType = request.ContentType ?? "application/octet-stream";
+            if (!MediaTypeHeaderValue.TryParse(contentType, out MediaTypeHeaderValue? parsedType))
+            {
+                return ValidationProblem(
+                    nameof(request.ContentType),
+                    "The artifact Content-Type is invalid.");
+            }
+
+            BinaryData content = await ReadBodyAsync(
+                request.Body,
+                MaxArtifactUploadBytes,
+                cancellationToken);
+            ArtifactInfo uploaded = await artifacts.PutAsync(
+                id,
+                $"upload-{Guid.NewGuid():N}",
+                fileName,
+                parsedType.MediaType.ToString(),
+                content,
+                cancellationToken);
+            return Results.Created(
+                $"/api/sessions/{Uri.EscapeDataString(id)}"
+                + $"/artifacts/{Uri.EscapeDataString(uploaded.ArtifactId)}"
+                + $"/{Uri.EscapeDataString(uploaded.FileName)}",
+                ArtifactResponse.From(uploaded));
+        }
+        catch (ArtifactStorageUnavailableException exception)
+        {
+            return ArtifactUnavailable(exception);
+        }
+        catch (ArgumentException exception)
+        {
+            return ValidationProblem(nameof(fileName), exception.Message);
+        }
+        catch (ArtifactTooLargeException exception)
+        {
+            return Results.Problem(
+                title: "Artifact is too large",
+                detail: exception.Message,
+                statusCode: StatusCodes.Status413PayloadTooLarge);
+        }
+    }
+
+    private static async Task<IResult> DownloadArtifactAsync(
+        string id,
+        string artifactId,
+        string fileName,
+        IAppSessionRepository repository,
+        IArtifactStore artifacts,
+        IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        if (await repository.GetAsync(id, cancellationToken) is null)
+        {
+            return Results.NotFound();
+        }
+
+        try
+        {
+            if (IsGeneratedArtifact(artifactId)
+                && !await IsSucceededAsync(
+                    id,
+                    artifactId,
+                    services.GetService<IExecutionJobRepository>(),
+                    cancellationToken))
+            {
+                return Results.NotFound();
+            }
+
+            ArtifactContent? artifact = await artifacts.GetAsync(
+                id,
+                artifactId,
+                fileName,
+                cancellationToken);
+            return artifact is null
+                ? Results.NotFound()
+                : Results.File(
+                    artifact.Content.ToArray(),
+                    artifact.Info.ContentType,
+                    artifact.Info.FileName);
+        }
+        catch (ArtifactStorageUnavailableException exception)
+        {
+            return ArtifactUnavailable(exception);
+        }
+        catch (ArgumentException exception)
+        {
+            return ValidationProblem(nameof(fileName), exception.Message);
+        }
+    }
+
     private static async Task<IResult> GetHealth(
         IOptions<CopilotOptions> options,
         IOptions<PersistenceOptions> persistence,
+        IOptions<DynamicSessionsOptions> dynamicSessions,
         CancellationToken cancellationToken)
     {
         Uri cliUrl = options.Value.CliUrl;
@@ -276,12 +433,20 @@ public static class SessionEndpoints
         {
             await client.ConnectAsync(cliUrl.Host, cliUrl.Port, cancellationToken);
             return Results.Ok(
-                new HealthResponse("healthy", persistence.Value.Backend, "reachable"));
+                new HealthResponse(
+                    "healthy",
+                    persistence.Value.Backend,
+                    "reachable",
+                    dynamicSessions.Value.Enabled ? "DynamicSessions" : "disabled"));
         }
         catch (SocketException)
         {
             return Results.Json(
-                new HealthResponse("degraded", persistence.Value.Backend, "unreachable"),
+                new HealthResponse(
+                    "degraded",
+                    persistence.Value.Backend,
+                    "unreachable",
+                    dynamicSessions.Value.Enabled ? "DynamicSessions" : "disabled"),
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
     }
@@ -297,4 +462,75 @@ public static class SessionEndpoints
             title: "Copilot CLI is unavailable",
             detail: exception.Message,
             statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    private static IResult ArtifactUnavailable(
+        ArtifactStorageUnavailableException exception) =>
+        Results.Problem(
+            title: "Artifact storage is unavailable",
+            detail: exception.Message,
+            statusCode: StatusCodes.Status409Conflict);
+
+    private static async Task<IReadOnlyList<ArtifactInfo>> FilterPublishedArtifactsAsync(
+        string sessionId,
+        IReadOnlyList<ArtifactInfo> artifacts,
+        IExecutionJobRepository? jobs,
+        CancellationToken cancellationToken)
+    {
+        var published = new List<ArtifactInfo>(artifacts.Count);
+        foreach (IGrouping<string, ArtifactInfo> group in artifacts.GroupBy(
+            static artifact => artifact.ArtifactId,
+            StringComparer.Ordinal))
+        {
+            if (!IsGeneratedArtifact(group.Key)
+                || await IsSucceededAsync(
+                    sessionId,
+                    group.Key,
+                    jobs,
+                    cancellationToken))
+            {
+                published.AddRange(group);
+            }
+        }
+
+        return published;
+    }
+
+    private static async Task<bool> IsSucceededAsync(
+        string sessionId,
+        string artifactId,
+        IExecutionJobRepository? jobs,
+        CancellationToken cancellationToken) =>
+        jobs is not null
+        && (await jobs.GetByJobIdAsync(sessionId, artifactId, cancellationToken))?.Status
+            == ExecutionJobStatus.Succeeded;
+
+    private static bool IsGeneratedArtifact(string artifactId) =>
+        artifactId.StartsWith("job-", StringComparison.Ordinal);
+
+    private static async Task<BinaryData> ReadBodyAsync(
+        Stream stream,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        using var content = new MemoryStream();
+        byte[] buffer = new byte[81_920];
+        while (true)
+        {
+            int read = await stream.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+            {
+                return BinaryData.FromBytes(content.ToArray());
+            }
+
+            if (content.Length + read > maximumBytes)
+            {
+                throw new ArtifactTooLargeException(maximumBytes);
+            }
+
+            await content.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+        }
+    }
+
+    private sealed class ArtifactTooLargeException(int maximumBytes)
+        : IOException($"Artifact uploads must not exceed {maximumBytes} bytes.");
 }

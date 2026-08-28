@@ -19,7 +19,50 @@ container public accessも無効にし、user-assigned managed identityへ付与
 `Storage Blob Data Contributor`と`Storage Table Data Contributor`だけでdata planeへ
 アクセスします。
 
-## Web authentication
+## Python dynamic session pool
+
+BicepはPython code実行用に`Microsoft.App/sessionPools`（`PythonLTS`built-in
+container、`2025-07-01`）を1つ作成します。この session pool はSessionFSやArtifact
+Blobとは別のephemeralなsandboxで、agentが生成したPython codeだけを実行します。
+
+| 項目 | 設定 |
+| --- | --- |
+| Container type | `PythonLTS`（built-in、custom containerではない） |
+| Pool management | `Dynamic`（Container Appsがsandbox instanceを自動的に割当・回収） |
+| Lifecycle | `Timed`。Idle sandboxは`cooldownPeriodInSeconds`後に回収される |
+| Cooldown period | `sessionPoolCooldownPeriodInSeconds`パラメータ。300～3600秒、既定300秒 |
+| 同時実行数 | `sessionPoolMaxConcurrentSessions`パラメータ。既定5 |
+| Ready instance数 | `sessionPoolReadySessionInstances`パラメータ。既定0（pre-warm sandboxを持たずidle costを最小化） |
+| Network | `EgressDisabled`。Sandbox内のcodeはinternetを含む外部networkへ到達できない |
+
+`readySessionInstances: 0`は初回実行にcold start latencyが発生することを意味します。
+低latencyが必要な場合は値を増やしてください（idle costとのtrade-off）。
+
+Data-plane accessはbuilt-in `Azure ContainerApps Session Executor`ロール
+（role ID `0fb8eba5-a2bb-4abe-b1c1-49dfad359bb0`）をsession poolだけへscopeして
+Web identityに付与します。Session poolはStorage accountや他のresourceを操作しないため、
+`Contributor`のような広いroleは付与しません。Sandbox container自体にはStorage
+credentialを一切渡さないため、生成されたcodeがAzure Storageへ直接アクセスすることは
+できません。
+
+Web containerには次のenvironment variableを渡します。
+
+| Environment variable | 値 |
+| --- | --- |
+| `DynamicSessions__Enabled` | `true` |
+| `DynamicSessions__PoolManagementEndpoint` | Session poolの`properties.poolManagementEndpoint` |
+| `DynamicSessions__ApiVersion` | `2025-10-02-preview`（data-plane API。preview版であることに注意） |
+| `AzureStorage__ExecutionJobsTable` | `executionjobs`（実行ジョブの状態を記録するAzure Table） |
+
+Application側の制約は次のとおりです。詳細は
+[`docs/architecture.md`](../../docs/architecture.md)を参照してください。
+
+- 1回のcode実行は最大220秒（built-in code interpreterのhard limit）
+- Sandboxのegressは無効。外部APIやpackage registryへのnetwork呼び出しは失敗する
+- Sandboxにcredentialを注入しないため、SessionFSやArtifact Blobへの直接アクセスはできない
+- 現時点でAzure上のlive validationは未実施（`docs/validation.md`を参照）
+
+
 
 Microsoft Entra IDでWeb application用のapplication registrationを1つ作成します。
 Azure resourceと別tenantのregistrationも使用できます。

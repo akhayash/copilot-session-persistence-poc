@@ -18,3 +18,26 @@ export async function apiRequest<T>(url: string, options?: RequestInit): Promise
 
   return response.json() as Promise<T>
 }
+
+export async function uploadArtifact<T>(
+  sessionId: string,
+  file: File,
+): Promise<T> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/artifacts?fileName=${encodeURIComponent(file.name)}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+      },
+      body: file,
+    },
+  )
+
+  if (!response.ok) {
+    const problem = await response.json().catch(() => null)
+    throw new Error(problem?.detail ?? problem?.title ?? `Upload failed (${response.status})`)
+  }
+
+  return response.json() as Promise<T>
+}

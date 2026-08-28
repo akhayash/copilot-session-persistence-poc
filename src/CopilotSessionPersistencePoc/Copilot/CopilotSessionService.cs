@@ -1,6 +1,7 @@
 using CopilotSessionPersistencePoc.AppState;
 using CopilotSessionPersistencePoc.SessionFs;
 using GitHub.Copilot;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 
 namespace CopilotSessionPersistencePoc.Copilot;
@@ -10,6 +11,7 @@ public sealed class CopilotSessionService(
     ISessionFsProviderFactory sessionFsProviders,
     ICopilotClientFactory clientFactory,
     ISessionLockProvider lockProvider,
+    IEnumerable<ICopilotToolProvider> toolProviders,
     IOptions<CopilotOptions> options,
     ILogger<CopilotSessionService> logger)
 {
@@ -195,24 +197,45 @@ public sealed class CopilotSessionService(
         }
     }
 
-    private SessionConfig CreateSessionConfig(AppSession appSession) => new()
+    private SessionConfig CreateSessionConfig(AppSession appSession)
     {
-        SessionId = appSession.Id,
-        Model = appSession.Model,
-        AvailableTools = [],
-        EnableSessionStore = false,
-        OnPermissionRequest = PermissionHandler.ApproveAll,
-        CreateSessionFsProvider = context => sessionFsProviders.Create(context.SessionId),
-    };
+        AIFunction[] tools = CreateTools(appSession.Id);
+        return new SessionConfig
+        {
+            SessionId = appSession.Id,
+            Model = appSession.Model,
+            Tools = tools,
+            AvailableTools = tools
+                .Select(static tool => $"custom:{tool.Name}")
+                .ToArray(),
+            EnableSessionStore = false,
+            OnPermissionRequest = PermissionHandler.ApproveAll,
+            CreateSessionFsProvider = context =>
+                sessionFsProviders.Create(context.SessionId),
+        };
+    }
 
-    private ResumeSessionConfig CreateResumeConfig(AppSession appSession) => new()
+    private ResumeSessionConfig CreateResumeConfig(AppSession appSession)
     {
-        Model = appSession.Model,
-        AvailableTools = [],
-        EnableSessionStore = false,
-        OnPermissionRequest = PermissionHandler.ApproveAll,
-        CreateSessionFsProvider = context => sessionFsProviders.Create(context.SessionId),
-    };
+        AIFunction[] tools = CreateTools(appSession.Id);
+        return new ResumeSessionConfig
+        {
+            Model = appSession.Model,
+            Tools = tools,
+            AvailableTools = tools
+                .Select(static tool => $"custom:{tool.Name}")
+                .ToArray(),
+            EnableSessionStore = false,
+            OnPermissionRequest = PermissionHandler.ApproveAll,
+            CreateSessionFsProvider = context =>
+                sessionFsProviders.Create(context.SessionId),
+        };
+    }
+
+    private AIFunction[] CreateTools(string sessionId) =>
+        toolProviders
+            .SelectMany(provider => provider.CreateTools(sessionId))
+            .ToArray();
 
     private async Task<AppSession> GetRequiredSessionAsync(
         string sessionId,

@@ -24,6 +24,9 @@ public sealed class AzureStorageOptions
     [RegularExpression("^[A-Za-z][A-Za-z0-9]{2,62}$")]
     public string AppSessionsTable { get; init; } = "appsessions";
 
+    [RegularExpression("^[A-Za-z][A-Za-z0-9]{2,62}$")]
+    public string ExecutionJobsTable { get; init; } = "executionjobs";
+
     [Range(1, 20)]
     public int MaximumWriteAttempts { get; init; } = 8;
 }

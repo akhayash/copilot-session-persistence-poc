@@ -2,6 +2,10 @@ namespace CopilotSessionPersistencePoc.ArtifactStorage;
 
 public interface IArtifactStore
 {
+    Task<IReadOnlyList<ArtifactInfo>> ListAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default);
+
     Task<ArtifactInfo> PutAsync(
         string sessionId,
         string artifactId,

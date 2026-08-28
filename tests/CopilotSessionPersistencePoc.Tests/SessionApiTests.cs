@@ -259,6 +259,58 @@ public sealed class SessionApiTests
         }
     }
 
+    [Fact]
+    public async Task ArtifactApiExplainsThatSqliteModeIsUnavailable()
+    {
+        string directory = Path.Join(
+            Path.GetTempPath(),
+            $"copilot-artifact-api-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        WebApplicationFactory<Program>? factory = null;
+
+        try
+        {
+            factory = new WebApplicationFactory<Program>()
+                .WithWebHostBuilder(builder =>
+                {
+                    builder.ConfigureAppConfiguration((_, configuration) =>
+                    {
+                        configuration.AddInMemoryCollection(
+                            new Dictionary<string, string?>
+                            {
+                                ["Persistence:DatabasePath"] =
+                                    Path.Join(directory, "sessions.db"),
+                            });
+                    });
+                });
+            using HttpClient client = factory.CreateClient();
+            SessionResponse created = Assert.IsType<SessionResponse>(
+                await (await client.PostAsJsonAsync(
+                    "/api/sessions",
+                    new CreateSessionRequest("Artifacts", "gpt-5-mini")))
+                    .Content.ReadFromJsonAsync<SessionResponse>());
+
+            HttpResponseMessage response = await client.GetAsync(
+                $"/api/sessions/{created.Id}/artifacts");
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains(
+                "AzureStorage",
+                await response.Content.ReadAsStringAsync(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (factory is not null)
+            {
+                await factory.DisposeAsync();
+            }
+
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private sealed class CancelledDeleteRepository : IAppSessionRepository
     {
         public Task<IReadOnlyList<AppSession>> ListAsync(

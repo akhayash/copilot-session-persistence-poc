@@ -25,5 +25,9 @@ public sealed class AzureStorageInitializer(
             .GetTableClient(value.AppSessionsTable)
             .CreateIfNotExistsAsync(cancellationToken)
             .ConfigureAwait(false);
+        await clients.TableService
+            .GetTableClient(value.ExecutionJobsTable)
+            .CreateIfNotExistsAsync(cancellationToken)
+            .ConfigureAwait(false);
     }
 }

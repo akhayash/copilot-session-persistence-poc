@@ -57,6 +57,21 @@ param maxReplicas int = 2
 @description('Deploy the Web chat Container App. The validation Job is always deployed.')
 param deployWebApp bool = true
 
+@description('Cooldown period in seconds before an idle Python dynamic session container is reclaimed.')
+@minValue(300)
+@maxValue(3600)
+param sessionPoolCooldownPeriodInSeconds int = 300
+
+@description('Maximum concurrent Python dynamic sessions allowed in the pool.')
+@minValue(1)
+@maxValue(300)
+param sessionPoolMaxConcurrentSessions int = 5
+
+@description('Ready (pre-warmed) Python dynamic session instances kept idle. 0 minimizes idle cost.')
+@minValue(0)
+@maxValue(300)
+param sessionPoolReadySessionInstances int = 0
+
 @description('Storage Account name. Must be globally unique.')
 param storageAccountName string = take(
   'st${replace(replace(toLower(environmentName), '-', ''), '_', '')}${uniqueString(subscription().id, resourceGroup().id)}',
@@ -88,6 +103,18 @@ var tableDataContributorRoleId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 )
+var sessionExecutorRoleId = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  '0fb8eba5-a2bb-4abe-b1c1-49dfad359bb0'
+)
+// sessionPools name must match ^[a-z][a-z0-9]*$ (no hyphens), 3-63 characters.
+// Appending a uniqueString suffix guarantees the minimum length even when
+// environmentName collapses to very few alphanumeric characters.
+var sessionPoolName = take(
+  'sp${replace(normalizedEnvironmentName, '-', '')}${uniqueString(subscription().id, resourceGroup().id, 'sessionpool')}',
+  63
+)
+
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   scope: resourceGroup(acrSubscriptionId, acrResourceGroupName)
   name: acrName
@@ -153,6 +180,11 @@ resource tableService 'Microsoft.Storage/storageAccounts/tableServices@2023-05-0
 resource appSessionsTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
   parent: tableService
   name: 'appsessions'
+}
+
+resource executionJobsTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  parent: tableService
+  name: 'executionjobs'
 }
 
 resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
@@ -353,6 +385,49 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2025-07-01' = {
   }
 }
 
+// Built-in PythonLTS dynamic session pool used for the Python code execution tool.
+// Dynamic pool management lets Azure Container Apps allocate and reclaim sandbox
+// instances automatically instead of the app managing container lifecycle. Sessions
+// use a Timed lifecycle: an idle sandbox is reclaimed after `cooldownPeriodInSeconds`.
+// `readySessionInstances: 0` keeps no pre-warmed sandbox running to minimize idle cost;
+// the first execution after an idle period incurs cold-start latency.
+resource sessionPool 'Microsoft.App/sessionPools@2025-07-01' = {
+  name: sessionPoolName
+  location: location
+  properties: {
+    containerType: 'PythonLTS'
+    poolManagementType: 'Dynamic'
+    environmentId: managedEnvironment.id
+    scaleConfiguration: {
+      maxConcurrentSessions: sessionPoolMaxConcurrentSessions
+      readySessionInstances: sessionPoolReadySessionInstances
+    }
+    dynamicPoolConfiguration: {
+      lifecycleConfiguration: {
+        lifecycleType: 'Timed'
+        cooldownPeriodInSeconds: sessionPoolCooldownPeriodInSeconds
+      }
+    }
+    sessionNetworkConfiguration: {
+      status: 'EgressDisabled'
+    }
+  }
+}
+
+// Least-privilege data-plane access: the built-in "Azure ContainerApps Session
+// Executor" role, scoped only to this session pool, lets the Web identity create
+// sessions and run code through the pool management endpoint. Contributor is not
+// required for this data-plane workflow.
+resource sessionPoolExecutorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(sessionPool.id, identity.id, sessionExecutorRoleId)
+  scope: sessionPool
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: sessionExecutorRoleId
+  }
+}
+
 resource webApp 'Microsoft.App/containerApps@2025-07-01' = if (deployWebApp) {
   name: webAppName
   location: location
@@ -424,6 +499,22 @@ resource webApp 'Microsoft.App/containerApps@2025-07-01' = if (deployWebApp) {
             {
               name: 'AzureStorage__TableServiceUri'
               value: storage.properties.primaryEndpoints.table
+            }
+            {
+              name: 'AzureStorage__ExecutionJobsTable'
+              value: executionJobsTable.name
+            }
+            {
+              name: 'DynamicSessions__Enabled'
+              value: 'true'
+            }
+            {
+              name: 'DynamicSessions__PoolManagementEndpoint'
+              value: sessionPool.properties.poolManagementEndpoint
+            }
+            {
+              name: 'DynamicSessions__ApiVersion'
+              value: '2025-10-02-preview'
             }
             {
               name: 'Copilot__CliUrl'
@@ -501,6 +592,7 @@ resource webApp 'Microsoft.App/containerApps@2025-07-01' = if (deployWebApp) {
   dependsOn: [
     acrPullRole
     blobDnsZoneGroup
+    sessionPoolExecutorRole
     storageBlobRole
     storageTableRole
     tableDnsZoneGroup
@@ -609,6 +701,8 @@ output storageAccountName string = storage.name
 output blobServiceUri string = storage.properties.primaryEndpoints.blob
 output tableServiceUri string = storage.properties.primaryEndpoints.table
 output containerAppsEnvironmentName string = managedEnvironment.name
+output sessionPoolName string = sessionPool.name
+output sessionPoolManagementEndpoint string = sessionPool.properties.poolManagementEndpoint
 output webAppName string = deployWebApp ? webApp!.name : ''
 output webAppUrl string = deployWebApp ? 'https://${webApp!.properties.configuration.ingress.fqdn}' : ''
 output validationJobName string = validationJob.name

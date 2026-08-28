@@ -4,6 +4,7 @@ using CopilotSessionPersistencePoc.AppState;
 using CopilotSessionPersistencePoc.ArtifactStorage;
 using CopilotSessionPersistencePoc.Copilot;
 using CopilotSessionPersistencePoc.Diagnostics;
+using CopilotSessionPersistencePoc.Execution;
 using CopilotSessionPersistencePoc.Persistence;
 using CopilotSessionPersistencePoc.SessionFs;
 
@@ -60,6 +61,27 @@ builder.Services
         static options => options.MaximumPreviewCharacters is >= 1 and <= 1_000_000,
         "Diagnostics:MaximumPreviewCharacters must be between 1 and 1000000.")
     .ValidateOnStart();
+builder.Services
+    .AddOptions<DynamicSessionsOptions>()
+    .Bind(builder.Configuration.GetSection(DynamicSessionsOptions.SectionName))
+    .ValidateDataAnnotations()
+    .Validate(
+        static options => !options.Enabled
+            || options.PoolManagementEndpoint is { IsAbsoluteUri: true },
+        "DynamicSessions:PoolManagementEndpoint must be absolute when Dynamic Sessions is enabled.")
+    .Validate(
+        static options => options.StaleJobTimeout
+            > TimeSpan.FromSeconds(options.ExecutionTimeoutSeconds + 30),
+        "DynamicSessions:StaleJobTimeout must exceed ExecutionTimeoutSeconds by more than 30 seconds.")
+    .ValidateOnStart();
+bool enableDynamicSessions = builder.Configuration.GetValue<bool>(
+    $"{DynamicSessionsOptions.SectionName}:Enabled");
+if (enableDynamicSessions && !useAzureStorage)
+{
+    throw new InvalidOperationException(
+        "Dynamic Sessions requires Persistence:Backend=AzureStorage.");
+}
+
 if (useAzureStorage)
 {
     builder.Services.AddSingleton<Azure.Core.TokenCredential>(
@@ -71,7 +93,14 @@ if (useAzureStorage)
     builder.Services.AddSingleton<ISessionFsProviderFactory, AzureBlobSessionFsProviderFactory>();
     builder.Services.AddScoped<ISessionFsDiagnosticsReader, AzureBlobSessionFsDiagnosticsReader>();
     builder.Services.AddSingleton<ISessionLockProvider, AzureBlobSessionLockProvider>();
-    builder.Services.AddSingleton<IArtifactStore, AzureBlobArtifactStore>();
+    builder.Services.AddScoped<IArtifactStore, AzureBlobArtifactStore>();
+    builder.Services.AddScoped<IExecutionJobRepository, AzureTableExecutionJobRepository>();
+    if (enableDynamicSessions)
+    {
+        builder.Services.AddHttpClient<IDynamicSessionsClient, AzureDynamicSessionsClient>();
+        builder.Services.AddScoped<PythonExecutionCoordinator>();
+        builder.Services.AddScoped<ICopilotToolProvider, PythonExecutionToolProvider>();
+    }
 }
 else
 {
@@ -81,6 +110,7 @@ else
     builder.Services.AddSingleton<ISessionFsProviderFactory, SqliteSessionFsProviderFactory>();
     builder.Services.AddScoped<ISessionFsDiagnosticsReader, SqliteSessionFsDiagnosticsReader>();
     builder.Services.AddSingleton<ISessionLockProvider, SessionLockProvider>();
+    builder.Services.AddSingleton<IArtifactStore, UnavailableArtifactStore>();
 }
 
 builder.Services.AddSingleton<ICopilotClientFactory, CopilotClientFactory>();

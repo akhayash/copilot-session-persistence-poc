@@ -12,6 +12,7 @@ Application metadata --> Azure Table Storage appsessions
 SessionFS agent state --> Azure Blob Storage sessionfs
 Session exclusion     --> Azure Blob lease in session-locks
 Artifact store        --> Azure Blob Storage artifacts
+Execution job state   --> Azure Table Storage executionjobs
 ```
 
 ## Configuration
@@ -37,14 +38,27 @@ SQLiteへautomatic fallbackしません。
 | SessionFS snapshot | Container `sessionfs`; `sessions/{sessionId}/state.json` |
 | Distributed lock | Container `session-locks`; sessionごとのBlob lease |
 | Artifact | Container `artifacts`; session/artifact/fileごとのBlob |
+| Execution job状態 | Table `executionjobs`; Python code実行ジョブのstatusとtimestamp |
 
 SessionFSの`events.jsonl`、checkpoint、plan、workspaceは個別Blobではなく、
 sessionごとの`state.json`内にvirtual nodesとして保存します。
+
+`executionjobs`が記録するのはPython code実行のジョブ状態だけです。実行中のcodeが
+読み書きするsandbox workspace自体はAzure Container Apps dynamic sessionが管理する
+ephemeralな領域であり、SessionFSやArtifact Blobとは別で、session pool cooldown後に
+破棄されます。詳細は
+[Architecture: 5.6 Python code実行とdynamic sessionのworkspace](architecture.md)
+を参照してください。
 
 ## Authentication
 
 Azure Container Appsではuser-assigned managed identityと`DefaultAzureCredential`を使います。
 Identityには`Storage Blob Data Contributor`と`Storage Table Data Contributor`を付与します。
+
+Python code実行のdynamic session poolは別のdata planeです。同じuser-assigned
+identityへ、built-in`Azure ContainerApps Session Executor`ロールをsession pool
+だけへscopeして追加付与します。Storage roleとは異なるresourceへのroleのため、
+`Contributor`のような広いroleは不要です（least privilege）。
 
 Public Web ingressはAzure Container Apps built-in authenticationで保護します。
 User sign-inにはMicrosoft Entra IDの既存application registrationを使います。

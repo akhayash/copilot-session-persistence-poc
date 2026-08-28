@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { FormEvent } from 'react'
-import { apiRequest } from './api'
+import type { ChangeEvent, FormEvent } from 'react'
+import { apiRequest, uploadArtifact } from './api'
 import SessionInspector from './SessionInspector'
 import './App.css'
 
@@ -26,6 +26,15 @@ type SessionDetails = {
 
 type Health = {
   persistence: string
+  pythonExecution: string
+}
+
+type Artifact = {
+  artifactId: string
+  fileName: string
+  contentType: string
+  sha256: string
+  sizeBytes: number
 }
 
 function App() {
@@ -38,6 +47,8 @@ function App() {
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [inspectorRefreshKey, setInspectorRefreshKey] = useState(0)
   const [persistenceBackend, setPersistenceBackend] = useState('SQLite')
+  const [pythonExecution, setPythonExecution] = useState('disabled')
+  const [artifacts, setArtifacts] = useState<Artifact[]>([])
 
   const refreshSessions = useCallback(async () => {
     const data = await apiRequest<Session[]>('/api/sessions')
@@ -45,11 +56,26 @@ function App() {
     return data
   }, [])
 
+  const refreshArtifacts = useCallback(async (sessionId: string, backend: string) => {
+    if (backend !== 'AzureStorage') {
+      setArtifacts([])
+      return
+    }
+
+    const data = await apiRequest<Artifact[]>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/artifacts`,
+    )
+    setArtifacts(data)
+  }, [])
+
   useEffect(() => {
     refreshSessions().catch((reason: Error) => setError(reason.message))
     fetch('/api/health')
       .then(async (response) => (await response.json()) as Health)
-      .then((health) => setPersistenceBackend(health.persistence))
+      .then((health) => {
+        setPersistenceBackend(health.persistence)
+        setPythonExecution(health.pythonExecution)
+      })
       .catch(() => undefined)
   }, [refreshSessions])
 
@@ -63,6 +89,7 @@ function App() {
         current.map((item) => (item.id === details.session.id ? details.session : item)),
       )
       setMessages(details.messages)
+      await refreshArtifacts(details.session.id, persistenceBackend)
       setInspectorRefreshKey((current) => current + 1)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to load the session.')
@@ -82,7 +109,9 @@ function App() {
       setSessions((current) => [session, ...current])
       setSelected(session)
       setMessages([])
+      setArtifacts([])
       setInspectorRefreshKey((current) => current + 1)
+      await refreshArtifacts(session.id, persistenceBackend)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to create a session.')
     } finally {
@@ -114,6 +143,7 @@ function App() {
       const refreshed = await refreshSessions()
       setSelected(refreshed.find((session) => session.id === selected.id) ?? selected)
       setInspectorRefreshKey((current) => current + 1)
+      await refreshArtifacts(selected.id, persistenceBackend)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Copilot did not return a response.')
     } finally {
@@ -133,9 +163,30 @@ function App() {
       setSessions((current) => current.filter((session) => session.id !== selected.id))
       setSelected(null)
       setMessages([])
+      setArtifacts([])
       setInspectorOpen(false)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to delete the session.')
+    } finally {
+      setBusy(false)
+    }
+
+  }
+
+  async function addArtifact(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!selected || !file || busy) {
+      return
+    }
+
+    setBusy(true)
+    setError(null)
+    try {
+      await uploadArtifact<Artifact>(selected.id, file)
+      await refreshArtifacts(selected.id, persistenceBackend)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to upload the artifact.')
     } finally {
       setBusy(false)
     }
@@ -185,6 +236,7 @@ function App() {
                 ? 'Table metadata + Blob SessionFS'
                 : 'SQLite metadata + SessionFS'}
             </span>
+            {pythonExecution !== 'disabled' && <span>Python: {pythonExecution}</span>}
           </div>
         </div>
       </aside>
@@ -201,6 +253,12 @@ function App() {
           </div>
           {selected && (
             <div className="header-actions">
+              {persistenceBackend === 'AzureStorage' && (
+                <label className="upload-button">
+                  Upload data
+                  <input type="file" onChange={addArtifact} disabled={busy} />
+                </label>
+              )}
               <button
                 className="inspect-button"
                 type="button"
@@ -251,6 +309,24 @@ function App() {
         </section>
 
         {error && <div className="error-banner">{error}</div>}
+
+        {selected && persistenceBackend === 'AzureStorage' && artifacts.length > 0 && (
+          <section className="artifacts" aria-label="Session artifacts">
+            <strong>Artifacts</strong>
+            <div>
+              {artifacts.map((artifact) => (
+                <a
+                  key={`${artifact.artifactId}/${artifact.fileName}`}
+                  href={`/api/sessions/${encodeURIComponent(selected.id)}/artifacts/${encodeURIComponent(artifact.artifactId)}/${encodeURIComponent(artifact.fileName)}`}
+                  download={artifact.fileName}
+                >
+                  {artifact.fileName}
+                  <small>{Math.ceil(artifact.sizeBytes / 1024)} KB</small>
+                </a>
+              ))}
+            </div>
+          </section>
+        )}
 
         <footer className="composer-area">
           <form className="composer" onSubmit={sendMessage}>

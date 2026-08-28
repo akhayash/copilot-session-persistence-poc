@@ -1,5 +1,6 @@
 using CopilotSessionPersistencePoc.AppState;
 using CopilotSessionPersistencePoc.Copilot;
+using CopilotSessionPersistencePoc.ArtifactStorage;
 
 namespace CopilotSessionPersistencePoc.Api;
 
@@ -30,4 +31,23 @@ public sealed record SessionResponse(
 
 public sealed record SessionDetailsResponse(SessionResponse Session, IReadOnlyList<CopilotMessage> Messages);
 
-public sealed record HealthResponse(string Status, string Persistence, string CopilotCli);
+public sealed record HealthResponse(
+    string Status,
+    string Persistence,
+    string CopilotCli,
+    string PythonExecution);
+
+public sealed record ArtifactResponse(
+    string ArtifactId,
+    string FileName,
+    string ContentType,
+    string Sha256,
+    long SizeBytes)
+{
+    public static ArtifactResponse From(ArtifactInfo artifact) => new(
+        artifact.ArtifactId,
+        artifact.FileName,
+        artifact.ContentType,
+        artifact.Sha256,
+        artifact.SizeBytes);
+}

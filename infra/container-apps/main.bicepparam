@@ -15,6 +15,10 @@ param minReplicas = 0
 param maxReplicas = 2
 param deployWebApp = true
 
+param sessionPoolCooldownPeriodInSeconds = 300
+param sessionPoolMaxConcurrentSessions = 5
+param sessionPoolReadySessionInstances = 0
+
 param copilotGitHubToken = readEnvironmentVariable('COPILOT_GITHUB_TOKEN')
 param copilotConnectionToken = readEnvironmentVariable('COPILOT_CONNECTION_TOKEN')
 param webAuthTenantId = readEnvironmentVariable('WEB_AUTH_TENANT_ID')

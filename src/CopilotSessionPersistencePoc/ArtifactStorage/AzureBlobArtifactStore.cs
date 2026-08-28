@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using Azure;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using CopilotSessionPersistencePoc.AppState;
 using CopilotSessionPersistencePoc.Persistence;
 using Microsoft.Extensions.Options;
 
@@ -9,11 +10,53 @@ namespace CopilotSessionPersistencePoc.ArtifactStorage;
 
 public sealed class AzureBlobArtifactStore(
     AzureStorageClients clients,
+    ISessionOwnerContext ownerContext,
     IOptions<AzureStorageOptions> options)
     : IArtifactStore
 {
     private readonly BlobContainerClient container =
         clients.BlobService.GetBlobContainerClient(options.Value.ArtifactsContainer);
+
+    public async Task<IReadOnlyList<ArtifactInfo>> ListAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateSegment(sessionId, nameof(sessionId));
+        string prefix = GetSessionPrefix(sessionId);
+        var artifacts = new List<ArtifactInfo>();
+        await foreach (BlobItem blob in container.GetBlobsAsync(
+            BlobTraits.Metadata,
+            BlobStates.None,
+            prefix,
+            cancellationToken))
+        {
+            string relativeName = blob.Name[prefix.Length..];
+            string[] parts = relativeName.Split('/', 2);
+            if (parts.Length != 2)
+            {
+                continue;
+            }
+
+            string artifactId = Uri.UnescapeDataString(parts[0]);
+            string fileName = Uri.UnescapeDataString(parts[1]);
+            string sha256 = blob.Metadata.TryGetValue("sha256", out string? storedHash)
+                ? storedHash
+                : string.Empty;
+            artifacts.Add(new ArtifactInfo(
+                sessionId,
+                artifactId,
+                fileName,
+                blob.Properties.ContentType ?? "application/octet-stream",
+                sha256,
+                blob.Properties.ContentLength ?? 0,
+                container.GetBlobClient(blob.Name).Uri));
+        }
+
+        return artifacts
+            .OrderBy(static artifact => artifact.ArtifactId, StringComparer.Ordinal)
+            .ThenBy(static artifact => artifact.FileName, StringComparer.Ordinal)
+            .ToArray();
+    }
 
     public async Task<ArtifactInfo> PutAsync(
         string sessionId,
@@ -34,6 +77,7 @@ public sealed class AzureBlobArtifactStore(
         BlobClient blob = GetBlob(sessionId, artifactId, fileName);
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            ["ownerid"] = ownerContext.OwnerKey,
             ["sessionid"] = sessionId,
             ["artifactid"] = artifactId,
             ["filename"] = fileName,
@@ -117,7 +161,7 @@ public sealed class AzureBlobArtifactStore(
         CancellationToken cancellationToken = default)
     {
         ValidateSegment(sessionId, nameof(sessionId));
-        string prefix = $"sessions/{Uri.EscapeDataString(sessionId)}/artifacts/";
+        string prefix = GetSessionPrefix(sessionId);
         await foreach (BlobItem blob in container.GetBlobsAsync(
             BlobTraits.None,
             BlobStates.None,
@@ -134,8 +178,11 @@ public sealed class AzureBlobArtifactStore(
 
     private BlobClient GetBlob(string sessionId, string artifactId, string fileName) =>
         container.GetBlobClient(
-            $"sessions/{Uri.EscapeDataString(sessionId)}/artifacts/"
+            $"{GetSessionPrefix(sessionId)}"
             + $"{Uri.EscapeDataString(artifactId)}/{Uri.EscapeDataString(fileName)}");
+
+    private string GetSessionPrefix(string sessionId) =>
+        $"owners/{ownerContext.OwnerKey}/sessions/{Uri.EscapeDataString(sessionId)}/artifacts/";
 
     private static void ValidateSegment(string value, string parameterName)
     {

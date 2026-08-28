@@ -213,7 +213,8 @@ button:disabled {
 }
 
 .delete-button,
-.inspect-button {
+.inspect-button,
+.upload-button {
   padding: 7px 11px;
   background: transparent;
   border-radius: 7px;
@@ -227,6 +228,20 @@ button:disabled {
 .inspect-button {
   color: #bae6fd;
   border: 1px solid #29475b;
+}
+
+.upload-button {
+  color: #c4b5fd;
+  border: 1px solid #45365e;
+  cursor: pointer;
+}
+
+.upload-button input {
+  display: none;
+}
+
+.upload-button:hover {
+  background: #211832;
 }
 
 .inspect-button:hover {
@@ -337,6 +352,43 @@ button:disabled {
   background: #351a23;
   border: 1px solid #5d2838;
   border-radius: 8px;
+}
+
+.artifacts {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: min(800px, calc(100% - 56px));
+  box-sizing: border-box;
+  margin: 0 auto 12px;
+  padding: 10px 12px;
+  color: #8291a7;
+  font-size: 12px;
+  background: #121b28;
+  border: 1px solid #263449;
+  border-radius: 9px;
+}
+
+.artifacts > div {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.artifacts a {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 5px 8px;
+  color: #bae6fd;
+  text-decoration: none;
+  background: #192536;
+  border-radius: 6px;
+}
+
+.artifacts small {
+  color: #718096;
 }
 
 .composer-area {
