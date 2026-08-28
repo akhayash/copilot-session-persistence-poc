@@ -142,6 +142,6 @@ Azure Container Apps built-in authenticationを有効化しました。
 - Container App revision: Healthy
 
 Interactive sign-in後のchat操作を含むbrowser E2Eは未実施です。
-Principal Object ID allow-listは最終templateへ追加し、Bicep compileとARM validationを
-実施しています。2026-08-28のlive testはsign-in redirectの確認であり、allow-list追加後の
+Final templateはprincipal allow-listを設定せず、application registrationを所有するtenantの
+userをauthentication対象にしています。2026-08-28のlive testはsign-in redirectの確認であり、
 interactive browser E2Eは未実施です。

@@ -44,9 +44,6 @@ param webAuthClientId string
 @secure()
 param webAuthClientSecret string
 
-@description('Microsoft Entra object ID of the user or service principal allowed to access the Web application.')
-param webAuthAllowedPrincipalObjectId string
-
 @description('Minimum Web replicas. Zero enables scale-to-zero.')
 @minValue(0)
 @maxValue(2)
@@ -527,16 +524,6 @@ resource webAuth 'Microsoft.App/containerApps/authConfigs@2025-07-01' = if (depl
           clientId: webAuthClientId
           clientSecretSettingName: 'web-auth-client-secret'
           openIdIssuer: '${environment().authentication.loginEndpoint}${webAuthTenantId}/v2.0'
-        }
-        validation: {
-          defaultAuthorizationPolicy: {
-            allowedPrincipals: {
-              groups: []
-              identities: [
-                webAuthAllowedPrincipalObjectId
-              ]
-            }
-          }
         }
       }
     }

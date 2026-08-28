@@ -200,7 +200,6 @@ dotnet test CopilotSessionPersistencePoc.slnx `
 - SQLite / Azure Blob Storage による custom SessionFS
 - Session の create、dispose、resume
 - Azure Container Apps built-in authentication と Microsoft Entra ID による user sign-in
-- Microsoft Entra principal Object ID allow-listによるdeployment access restriction
 - Azure Blob lease による session lock
 - SQLite / Azure Blob Storage の diagnostics
 - Azure Blob Storage の Artifact store contract
@@ -218,8 +217,7 @@ dotnet test CopilotSessionPersistencePoc.slnx `
   network、shell tool を公開しません。
 - Credential と connection token を browser、database、API payload、log に保存しません。
 - Azure Container Apps deployment では built-in authentication が Microsoft Entra ID
-  sign-inと明示したprincipal Object IDを要求します。Local 実行にはuser
-  authenticationを適用しません。
+  sign-inを要求します。Local実行にはuser authenticationを適用しません。
 - Azure Blob lease の喪失は operation cancellation に伝播しますが、fencing token は
   未実装です。
 
@@ -232,13 +230,13 @@ cookie、password database は実装しません。
 - Single-tenant application registration を使用
 - Application registration は Azure resource と別 tenant に配置可能
 - 未認証 browser は Microsoft Entra ID sign-in へ redirect
-- 認証済みrequestはdeployment parameterで指定した1つのprincipal Object IDだけを許可
+- Application registrationを所有するtenantのuserは全員authentication可能
 - `/api/health` は Container Apps の probe 用に匿名アクセスを許可
 - Client secret は Container Apps secret に保存
 - Local SQLite mode では user authentication を無効化
 
-このallow-listはPoC環境へのaccessを限定するためのplatform authorizationです。複数user
-向けのsession ownership、application role、sessionごとのauthorizationは実装していません。
+このPoCはsession ownership、application role、sessionごとのauthorizationを実装して
+いません。Sign-inしたuserは共有namespace内の全sessionを参照・更新・削除できます。
 
 Application registration と deployment parameter の設定は
 [Azure Container Apps deployment](infra/container-apps/README.md#web-authentication)

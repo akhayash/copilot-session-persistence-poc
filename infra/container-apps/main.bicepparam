@@ -20,4 +20,3 @@ param copilotConnectionToken = readEnvironmentVariable('COPILOT_CONNECTION_TOKEN
 param webAuthTenantId = readEnvironmentVariable('WEB_AUTH_TENANT_ID')
 param webAuthClientId = readEnvironmentVariable('WEB_AUTH_CLIENT_ID')
 param webAuthClientSecret = readEnvironmentVariable('WEB_AUTH_CLIENT_SECRET')
-param webAuthAllowedPrincipalObjectId = readEnvironmentVariable('WEB_AUTH_ALLOWED_PRINCIPAL_OBJECT_ID')

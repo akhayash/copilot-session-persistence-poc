@@ -29,7 +29,6 @@ Azure resourceと別tenantのregistrationも使用できます。
 - Directory tenant ID
 - Application client ID
 - Client secret
-- Web applicationの利用を許可するuserまたはservice principalのObject ID
 - Container App の application origin
 
 Web redirect URI は Container App の application origin に
@@ -50,15 +49,13 @@ Application registrationを作成したtenantの値をdeployment前に設定し�
 $env:WEB_AUTH_TENANT_ID = '<directory-tenant-id>'
 $env:WEB_AUTH_CLIENT_ID = '<application-client-id>'
 $env:WEB_AUTH_CLIENT_SECRET = '<client-secret>'
-$env:WEB_AUTH_ALLOWED_PRINCIPAL_OBJECT_ID = '<user-or-service-principal-object-id>'
 ```
 
 未認証browserはMicrosoft sign-inへredirectします。`/api/health`はliveness probeのため
 authentication対象外です。Client secretはContainer Apps secretに保存し、sourceや
-parameter fileへ書きません。認証済みrequestも
-`WEB_AUTH_ALLOWED_PRINCIPAL_OBJECT_ID`と一致するprincipalだけを許可します。このPoCは
-全sessionを1つの共有namespaceに保存するため、複数userを許可する場合はapplication側の
-session ownership検証を追加してください。
+parameter fileへ書きません。Application registrationを所有するtenantのuserは全員
+authenticationできます。このPoCは全sessionを1つの共有namespaceに保存するため、sign-in
+したuserはほかのuserが作成したsessionも参照・更新・削除できます。
 
 Application registrationのtenantとAzure Container Appのtenantは同一である必要は
 ありません。BicepはDirectory tenant IDからissuerを構成し、既存registrationの
@@ -135,7 +132,6 @@ $env:SESSIONFS_VALIDATOR_IMAGE = '<registry>.azurecr.io/sessionfs-validator:<tag
 $env:WEB_AUTH_TENANT_ID = '<directory-tenant-id>'
 $env:WEB_AUTH_CLIENT_ID = '<application-client-id>'
 $env:WEB_AUTH_CLIENT_SECRET = '<client-secret>'
-$env:WEB_AUTH_ALLOWED_PRINCIPAL_OBJECT_ID = '<user-or-service-principal-object-id>'
 
 az deployment group validate `
   --resource-group <resource-group> `
@@ -158,7 +154,6 @@ Remove-Item Env:\SESSIONFS_VALIDATOR_IMAGE
 Remove-Item Env:\WEB_AUTH_TENANT_ID
 Remove-Item Env:\WEB_AUTH_CLIENT_ID
 Remove-Item Env:\WEB_AUTH_CLIENT_SECRET
-Remove-Item Env:\WEB_AUTH_ALLOWED_PRINCIPAL_OBJECT_ID
 ```
 
 Tokenをsource、parameter file、deployment outputへ保存しないでください。Productionでは

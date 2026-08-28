@@ -256,7 +256,7 @@ TCP 到達性です。Copilot の authentication や storage data plane の正�
 - React は GitHub Copilot service や Azure Storage へ直接接続しない
 - Azure Container Apps の public ingress は built-in authentication で保護する
 - User sign-in には Microsoft Entra ID の既存 application registration を使用する
-- 認証済みrequestも明示したprincipal Object IDのallow-listで制限する
+- Application registrationを所有するtenantのuserをauthentication対象とする
 - Headless GitHub Copilot CLI が Copilot authentication を管理する
 - `COPILOT_CONNECTION_TOKEN` は Web と CLI の接続にだけ使用する
 - Token を browser、storage、API payload、log に保存しない
@@ -270,7 +270,8 @@ Azure Container Apps deployment にだけ構成します。
 
 - Artifact store は contract と cleanup までで、Web API には未配線
 - Azure Storage mode はMulti-node semanticsの検証用で、production-grade運用は対象外
-- 複数user向けのsession ownershipとapplication role authorizationは未実装
+- 複数user向けのsession ownershipとapplication role authorizationは未実装。認証済みuser
+  は共有namespace内の全sessionを操作できる
 - SessionFS は単一 JSON Blob のため large session で write amplification が発生
 - Blob lease に fencing token がない
 - Multi-region scaling、backup、retention、encryption policy は対象外

@@ -50,9 +50,9 @@ Public Web ingressはAzure Container Apps built-in authenticationで保護しま
 User sign-inにはMicrosoft Entra IDの既存application registrationを使います。
 Application registrationがAzure resourceと別tenantにある場合も、tenant ID、client ID、
 client secret、issuerを明示して構成できます。`/api/health`だけはContainer Apps probeの
-ためauthentication対象外です。認証済みrequestはBicep parameterで指定したuserまたは
-service principalのObject IDだけを許可します。複数user向けのsession ownershipは
-このPoCの対象外です。
+ためauthentication対象外です。Application registrationを所有するtenantのuserは全員
+authenticationできます。複数user向けのsession ownershipはこのPoCの対象外であり、
+認証済みuserは共有namespace内の全sessionを操作できます。
 
 現在のBicepはWeb ingressをpublicにし、Storage data planeへはBlob/Table Private Endpoint
 経由で接続します。Storageでは次を無効にします。
