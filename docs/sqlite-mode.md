@@ -36,11 +36,13 @@ Azure Table repository、Blob provider、Blob lease、Artifact storeは登録・
 
 | State | SQLite table | Owner |
 | --- | --- | --- |
-| Session ID、title、model、initialized flag、timestamps、version | `app_sessions` | Application |
+| Local owner ID、session ID、title、model、initialized flag、timestamps、version | `app_sessions` | Application |
 | Events、checkpoints、plan、workspaceなどのvirtual file tree | `session_fs_nodes` | GitHub Copilot SDK via `SessionFsProvider` |
 
 1つのdatabase fileを使いますが、application metadataとagent stateはtableと
 access layerを分けています。Application serviceは`session_fs_nodes`を直接操作しません。
+Localではdefaultの`local-user`をSHA-256 owner keyへ変換します。既存databaseを開くと
+`owner_id` columnを追加し、既存sessionをconfigured local ownerへ引き継ぎます。
 
 ## Run
 

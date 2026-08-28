@@ -33,7 +33,7 @@ SQLiteへautomatic fallbackしません。
 
 | State | Azure resource / key |
 | --- | --- |
-| Session metadata | Table `appsessions` |
+| Session metadata | Table `appsessions`; user owner hashごとのpartition |
 | SessionFS snapshot | Container `sessionfs`; `sessions/{sessionId}/state.json` |
 | Distributed lock | Container `session-locks`; sessionごとのBlob lease |
 | Artifact | Container `artifacts`; session/artifact/fileごとのBlob |
@@ -51,8 +51,10 @@ User sign-inにはMicrosoft Entra IDの既存application registrationを使い�
 Application registrationがAzure resourceと別tenantにある場合も、tenant ID、client ID、
 client secret、issuerを明示して構成できます。`/api/health`だけはContainer Apps probeの
 ためauthentication対象外です。Application registrationを所有するtenantのuserは全員
-authenticationできます。複数user向けのsession ownershipはこのPoCの対象外であり、
-認証済みuserは共有namespace内の全sessionを操作できます。
+authenticationできます。Azure Container Appsが注入する
+`X-MS-CLIENT-PRINCIPAL-ID`をSHA-256 owner keyへ変換し、Table `PartitionKey`として
+使用します。別userのsessionはlist、history、message、delete、diagnosticsの対象に
+なりません。
 
 現在のBicepはWeb ingressをpublicにし、Storage data planeへはBlob/Table Private Endpoint
 経由で接続します。Storageでは次を無効にします。
@@ -89,3 +91,4 @@ Azure Container AppsのBicep、image build、validation Job、cost特性は
 - Table、SessionFS Blob、Artifact Blobをまたぐdistributed transactionはありません。
 - SessionFSはsessionごとの単一JSON Blobなので、large sessionではwrite amplificationが増えます。
 - SQLite database fileの存在やnode-local filesystemに依存しません。
+- Ownership導入前のlegacy `PartitionKey=session` rowは自動移行せず、user一覧へ表示しません。

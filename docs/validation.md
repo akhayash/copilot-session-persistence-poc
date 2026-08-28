@@ -28,6 +28,7 @@ npm run build
 - Path validation、ENOENT mapping、session isolation
 - 別 provider instance からの persisted state read
 - Application metadata の optimistic concurrency
+- SQLite migrationとauthenticated user間のsession isolation
 - Diagnostics preview と redaction
 
 ## 3. Local restart verification
@@ -75,6 +76,7 @@ dotnet test CopilotSessionPersistencePoc.slnx `
 - 別 SessionFS provider instance から同じ conversation state を共有
 - Concurrent append の競合時に ETag retry を行い、event を欠落させない
 - Azure Table Storage の session metadata を別 repository instance から参照・更新
+- 異なるowner keyのrepositoryから別userのmetadataをlist、read、deleteできない
 - Artifact を別 store instance から取得し、SHA-256 と content type を維持
 - Blob lease によって同一 session の二重 lock を拒否
 - Lease release 後に別 instance が同じ session lock を取得
@@ -144,4 +146,5 @@ Azure Container Apps built-in authenticationを有効化しました。
 Interactive sign-in後のchat操作を含むbrowser E2Eは未実施です。
 Final templateはprincipal allow-listを設定せず、application registrationを所有するtenantの
 userをauthentication対象にしています。2026-08-28のlive testはsign-in redirectの確認であり、
-interactive browser E2Eは未実施です。
+interactive browser E2Eは未実施です。Application-level isolationは
+`X-MS-CLIENT-PRINCIPAL-ID`をowner keyにしたAPI contract testで検証します。

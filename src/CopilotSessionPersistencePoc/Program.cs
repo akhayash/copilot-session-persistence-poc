@@ -10,7 +10,15 @@ using CopilotSessionPersistencePoc.SessionFs;
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<SessionOwnerExceptionHandler>();
 builder.Services.AddExceptionHandler<SqliteBusyExceptionHandler>();
+builder.Services.AddHttpContextAccessor();
+builder.Services
+    .AddOptions<SessionOwnershipOptions>()
+    .Bind(builder.Configuration.GetSection(SessionOwnershipOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+builder.Services.AddScoped<ISessionOwnerContext, HttpSessionOwnerContext>();
 builder.Services
     .AddOptions<PersistenceOptions>()
     .Bind(builder.Configuration.GetSection(PersistenceOptions.SectionName))

@@ -5,13 +5,14 @@
 このアプリケーションは、GitHub Copilot SDK の会話を Web サーバーの外へ保存します。
 Web サーバーを再起動しても、保存済みの状態から会話を再開できます。
 
-重要な設計判断は次の 5 点です。
+重要な設計判断は次の 6 点です。
 
 1. セッション一覧と会話本体を分けて保存する
 2. 会話本体は GitHub Copilot SDK の `SessionFsProvider` を通して保存する
 3. Web サーバーのメモリを正本にしない
 4. SQLite と Azure Storage を設定で切り替える
 5. Multi-node では Web node ごとに専用の Copilot runtime を持つ
+6. 認証済みuserごとにsession metadataをpartitionする
 
 ## 2. 実行モード
 
@@ -86,7 +87,7 @@ Business flow は SQLite や Azure SDK の型へ直接依存しません。
 
 | Data | 内容 | 管理者 |
 | --- | --- | --- |
-| Application metadata | ID、title、model、作成日時、初期化状態 | Application |
+| Application metadata | Owner key、ID、title、model、作成日時、初期化状態 | Application |
 | Agent state | Message events、checkpoint、plan、workspace | GitHub Copilot SDK |
 | Lock state | 同じ session の実行権 | Application |
 | Artifact | 完成した binary file と metadata | Application |
@@ -98,7 +99,7 @@ SDK が SessionFS に書いた file tree をそのまま永続化します。
 
 | Table | 内容 |
 | --- | --- |
-| `app_sessions` | Application metadata と更新競合を検出する `version` |
+| `app_sessions` | `owner_id`で分離したmetadataと更新競合を検出する`version` |
 | `session_fs_nodes` | Session ID と virtual path を key にした file / directory |
 
 SQLite は WAL mode と bounded `busy_timeout` を使用します。Append、rename、
@@ -108,7 +109,7 @@ recursive remove は transaction 内で実行します。
 
 | Data | Resource と key | 主な内容 |
 | --- | --- | --- |
-| Application metadata | Table `appsessions`; `PartitionKey=session`, `RowKey={sessionId}` | title、model、isInitialized、isDeleting、timestamps、version |
+| Application metadata | Table `appsessions`; `PartitionKey={ownerHash}`, `RowKey={sessionId}` | title、model、isInitialized、isDeleting、timestamps、version |
 | Agent state | Container `sessionfs`; `sessions/{sessionId}/state.json` | Snapshot version と SessionFS node dictionary |
 | Lock | Container `session-locks`; `sessions/{sessionId}.lock` | Empty Blob に設定した lease |
 | Artifact | Container `artifacts`; session / artifact / file ごとの Blob | Binary content、content type、SHA-256 |
@@ -131,6 +132,15 @@ write amplification が増えます。
 
 Azure への接続は、Azurite などで connection string を明示する場合を除き、
 `DefaultAzureCredential` を使用します。
+
+### 5.5 User isolation
+
+Azure Container Apps built-in authenticationが注入する
+`X-MS-CLIENT-PRINCIPAL-ID`をSHA-256でhash化し、session owner keyとして使います。
+External requestはこのidentity headerを設定できず、platformが認証後に注入します。
+Metadata lookupをowner keyで制限するため、別userはsession一覧、history、message、
+delete、diagnosticsへ到達できません。Local SQLite modeでは`local-user`をownerとして
+使用します。
 
 ## 6. 1 回の message request
 
@@ -257,6 +267,7 @@ TCP 到達性です。Copilot の authentication や storage data plane の正�
 - Azure Container Apps の public ingress は built-in authentication で保護する
 - User sign-in には Microsoft Entra ID の既存 application registration を使用する
 - Application registrationを所有するtenantのuserをauthentication対象とする
+- `X-MS-CLIENT-PRINCIPAL-ID`をowner keyへ変換し、session accessをuser単位に分離する
 - Headless GitHub Copilot CLI が Copilot authentication を管理する
 - `COPILOT_CONNECTION_TOKEN` は Web と CLI の接続にだけ使用する
 - Token を browser、storage、API payload、log に保存しない
@@ -270,8 +281,9 @@ Azure Container Apps deployment にだけ構成します。
 
 - Artifact store は contract と cleanup までで、Web API には未配線
 - Azure Storage mode はMulti-node semanticsの検証用で、production-grade運用は対象外
-- 複数user向けのsession ownershipとapplication role authorizationは未実装。認証済みuser
-  は共有namespace内の全sessionを操作できる
+- Application roleベースのauthorizationは未実装
+- Ownership導入前にAzure Table Storageのlegacy partitionへ保存されたsessionは、新しい
+  user partitionへ自動移行せず一覧に表示しない
 - SessionFS は単一 JSON Blob のため large session で write amplification が発生
 - Blob lease に fencing token がない
 - Multi-region scaling、backup、retention、encryption policy は対象外

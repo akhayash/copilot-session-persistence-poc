@@ -17,6 +17,81 @@ namespace CopilotSessionPersistencePoc.Tests;
 public sealed class SessionApiTests
 {
     [Fact]
+    public async Task AuthenticatedUsersOnlySeeTheirOwnSessions()
+    {
+        string directory = Path.Join(Path.GetTempPath(), $"copilot-api-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        WebApplicationFactory<Program>? factory = null;
+
+        try
+        {
+            factory = new WebApplicationFactory<Program>()
+                .WithWebHostBuilder(builder =>
+                {
+                    builder.ConfigureAppConfiguration((_, configuration) =>
+                    {
+                        configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                        {
+                            ["Persistence:DatabasePath"] = Path.Join(directory, "sessions.db"),
+                            ["SessionOwnership:RequireAuthenticatedPrincipal"] = "true",
+                        });
+                    });
+                });
+            using HttpClient anonymous = factory.CreateClient();
+            Assert.Equal(
+                HttpStatusCode.Unauthorized,
+                (await anonymous.GetAsync("/api/sessions")).StatusCode);
+
+            using HttpClient userA = factory.CreateClient();
+            userA.DefaultRequestHeaders.Add(
+                HttpSessionOwnerContext.PrincipalIdHeader,
+                "entra-user-a");
+            using HttpClient userB = factory.CreateClient();
+            userB.DefaultRequestHeaders.Add(
+                HttpSessionOwnerContext.PrincipalIdHeader,
+                "entra-user-b");
+
+            HttpResponseMessage createResponse = await userA.PostAsJsonAsync(
+                "/api/sessions",
+                new CreateSessionRequest("User A session", "gpt-5-mini"));
+            Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+            SessionResponse created =
+                Assert.IsType<SessionResponse>(
+                    await createResponse.Content.ReadFromJsonAsync<SessionResponse>());
+
+            Assert.Single(
+                Assert.IsType<SessionResponse[]>(
+                    await userA.GetFromJsonAsync<SessionResponse[]>("/api/sessions")));
+            Assert.Empty(
+                Assert.IsType<SessionResponse[]>(
+                    await userB.GetFromJsonAsync<SessionResponse[]>("/api/sessions")));
+            Assert.Equal(
+                HttpStatusCode.NotFound,
+                (await userB.GetAsync($"/api/sessions/{created.Id}")).StatusCode);
+            Assert.Equal(
+                HttpStatusCode.NotFound,
+                (await userB.GetAsync(
+                    $"/api/sessions/{created.Id}/diagnostics")).StatusCode);
+            Assert.Equal(
+                HttpStatusCode.NoContent,
+                (await userB.DeleteAsync($"/api/sessions/{created.Id}")).StatusCode);
+            Assert.Equal(
+                HttpStatusCode.OK,
+                (await userA.GetAsync($"/api/sessions/{created.Id}")).StatusCode);
+        }
+        finally
+        {
+            if (factory is not null)
+            {
+                await factory.DisposeAsync();
+            }
+
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task GetReturnsNotFoundWhenSessionIsDeletedBeforeLockAcquisition()
     {
         string directory = Path.Join(Path.GetTempPath(), $"copilot-api-tests-{Guid.NewGuid():N}");

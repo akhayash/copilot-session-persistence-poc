@@ -4,7 +4,9 @@ using Microsoft.Data.Sqlite;
 
 namespace CopilotSessionPersistencePoc.AppState;
 
-public sealed class SqliteAppSessionRepository(ISqliteConnectionFactory connectionFactory)
+public sealed class SqliteAppSessionRepository(
+    ISqliteConnectionFactory connectionFactory,
+    ISessionOwnerContext ownerContext)
     : IAppSessionRepository
 {
     public async Task<IReadOnlyList<AppSession>> ListAsync(
@@ -16,8 +18,10 @@ public sealed class SqliteAppSessionRepository(ISqliteConnectionFactory connecti
         command.CommandText = """
             SELECT id, title, model, is_initialized, created_at, updated_at, version
             FROM app_sessions
+            WHERE owner_id = $ownerId
             ORDER BY updated_at DESC;
             """;
+        command.Parameters.AddWithValue("$ownerId", ownerContext.OwnerKey);
 
         var sessions = new List<AppSession>();
         await using var reader =
@@ -40,9 +44,10 @@ public sealed class SqliteAppSessionRepository(ISqliteConnectionFactory connecti
         command.CommandText = """
             SELECT id, title, model, is_initialized, created_at, updated_at, version
             FROM app_sessions
-            WHERE id = $id;
+            WHERE id = $id AND owner_id = $ownerId;
             """;
         command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$ownerId", ownerContext.OwnerKey);
 
         await using var reader =
             await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -68,11 +73,12 @@ public sealed class SqliteAppSessionRepository(ISqliteConnectionFactory connecti
         await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO app_sessions (
-                id, title, model, is_initialized, created_at, updated_at, version
+                id, owner_id, title, model, is_initialized, created_at, updated_at, version
             )
-            VALUES ($id, $title, $model, 0, $createdAt, $updatedAt, 0);
+            VALUES ($id, $ownerId, $title, $model, 0, $createdAt, $updatedAt, 0);
             """;
         command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$ownerId", ownerContext.OwnerKey);
         command.Parameters.AddWithValue("$title", title);
         command.Parameters.AddWithValue("$model", model);
         command.Parameters.AddWithValue("$createdAt", FormatTimestamp(now));
@@ -123,16 +129,27 @@ public sealed class SqliteAppSessionRepository(ISqliteConnectionFactory connecti
         await using (var fsCommand = connection.CreateCommand())
         {
             fsCommand.Transaction = transaction;
-            fsCommand.CommandText = "DELETE FROM session_fs_nodes WHERE session_id = $id;";
+            fsCommand.CommandText = """
+                DELETE FROM session_fs_nodes
+                WHERE session_id = $id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM app_sessions
+                      WHERE id = $id AND owner_id = $ownerId
+                  );
+                """;
             fsCommand.Parameters.AddWithValue("$id", id);
+            fsCommand.Parameters.AddWithValue("$ownerId", ownerContext.OwnerKey);
             await fsCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
         await using (var sessionCommand = connection.CreateCommand())
         {
             sessionCommand.Transaction = transaction;
-            sessionCommand.CommandText = "DELETE FROM app_sessions WHERE id = $id;";
+            sessionCommand.CommandText =
+                "DELETE FROM app_sessions WHERE id = $id AND owner_id = $ownerId;";
             sessionCommand.Parameters.AddWithValue("$id", id);
+            sessionCommand.Parameters.AddWithValue("$ownerId", ownerContext.OwnerKey);
             await sessionCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -158,9 +175,12 @@ public sealed class SqliteAppSessionRepository(ISqliteConnectionFactory connecti
                 title = COALESCE($title, title),
                 updated_at = $updatedAt,
                 version = version + 1
-            WHERE id = $id AND version = $expectedVersion;
+            WHERE id = $id
+              AND owner_id = $ownerId
+              AND version = $expectedVersion;
             """;
         command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$ownerId", ownerContext.OwnerKey);
         command.Parameters.AddWithValue("$expectedVersion", expectedVersion);
         command.Parameters.AddWithValue("$markInitialized", markInitialized ? 1 : 0);
         command.Parameters.AddWithValue("$title", (object?)title ?? DBNull.Value);

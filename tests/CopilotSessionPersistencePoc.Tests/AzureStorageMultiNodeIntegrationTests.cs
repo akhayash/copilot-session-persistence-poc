@@ -108,17 +108,20 @@ public sealed class AzureStorageMultiNodeIntegrationTests
                         StringSplitOptions.None).Length - 1);
             }
 
+            var sharedOwner = new TestSessionOwnerContext("shared-user");
             var repositoryA =
                 new AzureTableAppSessionRepository(
                     clients,
                     nodeAStore,
                     new AzureBlobArtifactStore(clients, options),
+                    sharedOwner,
                     options);
             var repositoryB =
                 new AzureTableAppSessionRepository(
                     clients,
                     nodeBStore,
                     new AzureBlobArtifactStore(clients, options),
+                    sharedOwner,
                     options);
             AppSession created = await repositoryA.CreateAsync(
                 "shared-session",
@@ -137,6 +140,20 @@ public sealed class AzureStorageMultiNodeIntegrationTests
                 (await repositoryA.GetAsync("shared-session"))!.Title);
             Assert.Equal(1, initialized.Version);
 
+            var otherOwnerRepository =
+                new AzureTableAppSessionRepository(
+                    clients,
+                    nodeBStore,
+                    new AzureBlobArtifactStore(clients, options),
+                    new TestSessionOwnerContext("different-user"),
+                    options);
+            Assert.Empty(await otherOwnerRepository.ListAsync());
+            Assert.Null(await otherOwnerRepository.GetAsync("shared-session"));
+            Assert.False(
+                await otherOwnerRepository.ExistsForDeletionAsync("shared-session"));
+            await otherOwnerRepository.DeleteAsync("shared-session");
+            Assert.NotNull(await repositoryA.GetAsync("shared-session"));
+
             await repositoryA.CreateAsync(
                 "deletion-retry-session",
                 "Deletion retry",
@@ -144,7 +161,7 @@ public sealed class AzureStorageMultiNodeIntegrationTests
             var table = clients.TableService.GetTableClient(options.Value.AppSessionsTable);
             var deletingEntity = (
                 await table.GetEntityAsync<AzureTableAppSessionRepository.AppSessionEntity>(
-                    "session",
+                    sharedOwner.OwnerKey,
                     "deletion-retry-session")).Value;
             deletingEntity.IsDeleting = true;
             await table.UpdateEntityAsync(

@@ -11,10 +11,10 @@ public sealed class AzureTableAppSessionRepository(
     AzureStorageClients clients,
     AzureBlobSessionFsStore sessionFsStore,
     IArtifactStore artifactStore,
+    ISessionOwnerContext ownerContext,
     IOptions<AzureStorageOptions> options)
     : IAppSessionRepository
 {
-    private const string Partition = "session";
     private readonly TableClient table =
         clients.TableService.GetTableClient(options.Value.AppSessionsTable);
 
@@ -23,7 +23,7 @@ public sealed class AzureTableAppSessionRepository(
     {
         var sessions = new List<AppSession>();
         await foreach (AppSessionEntity entity in table.QueryAsync<AppSessionEntity>(
-            entity => entity.PartitionKey == Partition,
+            entity => entity.PartitionKey == ownerContext.OwnerKey,
             cancellationToken: cancellationToken))
         {
             if (!entity.IsDeleting)
@@ -45,7 +45,7 @@ public sealed class AzureTableAppSessionRepository(
         {
             NullableResponse<AppSessionEntity> response =
                 await table.GetEntityIfExistsAsync<AppSessionEntity>(
-                    Partition,
+                    ownerContext.OwnerKey,
                     id,
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
@@ -67,7 +67,7 @@ public sealed class AzureTableAppSessionRepository(
         {
             NullableResponse<AppSessionEntity> response =
                 await table.GetEntityIfExistsAsync<AppSessionEntity>(
-                    Partition,
+                    ownerContext.OwnerKey,
                     id,
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
@@ -88,7 +88,7 @@ public sealed class AzureTableAppSessionRepository(
         DateTimeOffset now = DateTimeOffset.UtcNow;
         var entity = new AppSessionEntity
         {
-            PartitionKey = Partition,
+            PartitionKey = ownerContext.OwnerKey,
             RowKey = id,
             Title = title,
             Model = model,
@@ -126,7 +126,7 @@ public sealed class AzureTableAppSessionRepository(
     {
         NullableResponse<AppSessionEntity> response =
             await table.GetEntityIfExistsAsync<AppSessionEntity>(
-                Partition,
+                ownerContext.OwnerKey,
                 id,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
@@ -151,7 +151,7 @@ public sealed class AzureTableAppSessionRepository(
 
         await sessionFsStore.DeleteAsync(id, cancellationToken).ConfigureAwait(false);
         await artifactStore.DeleteSessionAsync(id, cancellationToken).ConfigureAwait(false);
-        await table.DeleteEntityAsync(Partition, id, ETag.All, cancellationToken)
+        await table.DeleteEntityAsync(ownerContext.OwnerKey, id, ETag.All, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -164,7 +164,7 @@ public sealed class AzureTableAppSessionRepository(
     {
         NullableResponse<AppSessionEntity> response =
             await table.GetEntityIfExistsAsync<AppSessionEntity>(
-                Partition,
+                ownerContext.OwnerKey,
                 id,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);

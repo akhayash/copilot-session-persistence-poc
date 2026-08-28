@@ -200,6 +200,7 @@ dotnet test CopilotSessionPersistencePoc.slnx `
 - SQLite / Azure Blob Storage による custom SessionFS
 - Session の create、dispose、resume
 - Azure Container Apps built-in authentication と Microsoft Entra ID による user sign-in
+- Microsoft Entra user Object IDをowner keyにしたsession isolation
 - Azure Blob lease による session lock
 - SQLite / Azure Blob Storage の diagnostics
 - Azure Blob Storage の Artifact store contract
@@ -231,12 +232,15 @@ cookie、password database は実装しません。
 - Application registration は Azure resource と別 tenant に配置可能
 - 未認証 browser は Microsoft Entra ID sign-in へ redirect
 - Application registrationを所有するtenantのuserは全員authentication可能
+- Session一覧、history、message、delete、diagnosticsはsign-in userごとに分離
 - `/api/health` は Container Apps の probe 用に匿名アクセスを許可
 - Client secret は Container Apps secret に保存
 - Local SQLite mode では user authentication を無効化
 
-このPoCはsession ownership、application role、sessionごとのauthorizationを実装して
-いません。Sign-inしたuserは共有namespace内の全sessionを参照・更新・削除できます。
+Azure Container Appsが注入する`X-MS-CLIENT-PRINCIPAL-ID`をSHA-256 owner keyへ変換し、
+application metadataをuser単位にpartitionします。別userのsession IDを知っていても、
+history、message、delete、diagnostics APIは404またはidempotent 204となります。
+Application roleベースのauthorizationは実装していません。
 
 Application registration と deployment parameter の設定は
 [Azure Container Apps deployment](infra/container-apps/README.md#web-authentication)

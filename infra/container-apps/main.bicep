@@ -414,6 +414,10 @@ resource webApp 'Microsoft.App/containerApps@2025-07-01' = if (deployWebApp) {
               value: 'AzureStorage'
             }
             {
+              name: 'SessionOwnership__RequireAuthenticatedPrincipal'
+              value: 'true'
+            }
+            {
               name: 'AzureStorage__BlobServiceUri'
               value: storage.properties.primaryEndpoints.blob
             }

@@ -54,8 +54,9 @@ $env:WEB_AUTH_CLIENT_SECRET = '<client-secret>'
 未認証browserはMicrosoft sign-inへredirectします。`/api/health`はliveness probeのため
 authentication対象外です。Client secretはContainer Apps secretに保存し、sourceや
 parameter fileへ書きません。Application registrationを所有するtenantのuserは全員
-authenticationできます。このPoCは全sessionを1つの共有namespaceに保存するため、sign-in
-したuserはほかのuserが作成したsessionも参照・更新・削除できます。
+authenticationできます。Platformが注入する`X-MS-CLIENT-PRINCIPAL-ID`をapplicationが
+SHA-256 owner keyへ変換し、session metadataをuserごとにpartitionします。別userのsession
+IDを指定したrequestもmetadata lookupで拒否されます。
 
 Application registrationのtenantとAzure Container Appのtenantは同一である必要は
 ありません。BicepはDirectory tenant IDからissuerを構成し、既存registrationの
