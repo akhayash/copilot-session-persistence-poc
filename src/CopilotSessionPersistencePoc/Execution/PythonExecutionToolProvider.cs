@@ -51,6 +51,7 @@ public sealed class PythonExecutionToolProvider(
             toolOptions: new CopilotToolOptions
             {
                 Defer = CopilotToolDefer.Never,
+                SkipPermission = true,
             },
             factoryOptions: new AIFunctionFactoryOptions
             {

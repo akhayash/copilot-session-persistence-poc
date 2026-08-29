@@ -121,15 +121,8 @@ public sealed class AzureDynamicSessionsClient(
                 JsonOptions,
                 cancellationToken);
             files.AddRange(envelope?.Value?
-                .Where(static item => item.Type?.Equals(
-                    "File",
-                    StringComparison.OrdinalIgnoreCase) is true
-                    && item.Name is { Length: > 0 }
-                    && string.IsNullOrEmpty(item.Directory))
-                .Select(static item => new DynamicSessionFile(
-                    item.Name!,
-                    item.SizeInBytes,
-                    item.LastModifiedAt)) ?? []);
+                .Select(ToDynamicSessionFile)
+                .OfType<DynamicSessionFile>() ?? []);
             if (files.Count > settings.MaximumInputFiles + settings.MaximumOutputFiles)
             {
                 throw new DynamicSessionsException(
@@ -252,6 +245,30 @@ public sealed class AzureDynamicSessionsClient(
             $"Failed to {operation}: HTTP {(int)response.StatusCode}. {detail}");
     }
 
+    private static DynamicSessionFile? ToDynamicSessionFile(FileItem item)
+    {
+        string? name = item.Name ?? item.Properties?.Filename;
+        string? type = item.Type ?? (item.Properties is null ? null : "File");
+        long? size = item.SizeInBytes ?? item.Properties?.Size;
+        if (type is null
+            || !type.Equals("File", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrEmpty(item.Directory))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(name) || size is null or < 0)
+        {
+            throw new DynamicSessionsException(
+                "Dynamic Sessions returned invalid sandbox file metadata.");
+        }
+
+        return new DynamicSessionFile(
+            name,
+            size.Value,
+            item.LastModifiedAt ?? item.Properties?.LastModifiedTime);
+    }
+
     private sealed record ExecutionResponse(
         [property: JsonPropertyName("status")] string? Status,
         [property: JsonPropertyName("result")] ExecutionResultPayload? Result);
@@ -271,6 +288,12 @@ public sealed class AzureDynamicSessionsClient(
         [property: JsonPropertyName("name")] string? Name,
         [property: JsonPropertyName("directory")] string? Directory,
         [property: JsonPropertyName("type")] string? Type,
-        [property: JsonPropertyName("sizeInBytes")] long SizeInBytes,
-        [property: JsonPropertyName("lastModifiedAt")] DateTimeOffset? LastModifiedAt);
+        [property: JsonPropertyName("sizeInBytes")] long? SizeInBytes,
+        [property: JsonPropertyName("lastModifiedAt")] DateTimeOffset? LastModifiedAt,
+        [property: JsonPropertyName("properties")] LegacyFileProperties? Properties);
+
+    private sealed record LegacyFileProperties(
+        [property: JsonPropertyName("filename")] string? Filename,
+        [property: JsonPropertyName("size")] long? Size,
+        [property: JsonPropertyName("lastModifiedTime")] DateTimeOffset? LastModifiedTime);
 }

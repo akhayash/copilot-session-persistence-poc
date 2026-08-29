@@ -104,12 +104,11 @@ public sealed class DynamicSessionsClientTests
                         {
                           "value": [
                             {
-                              "name": "result.csv",
-                              "directory": "",
-                              "type": "File",
-                              "contentType": "text/csv",
-                              "sizeInBytes": 12,
-                              "lastModifiedAt": "2026-01-01T00:00:00Z"
+                              "properties": {
+                                "filename": "result.csv",
+                                "size": 12,
+                                "lastModifiedTime": "2026-01-01T00:00:00Z"
+                              }
                             }
                           ]
                         }
