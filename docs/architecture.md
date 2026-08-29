@@ -171,7 +171,8 @@ cold start latencyが発生します。
 - Web identityにはsession poolだけへscopeしたbuilt-in
   `Azure ContainerApps Session Executor`ロールのみを付与し、`Contributor`のような
   広いroleは使用しない（least privilege）
-- Azure上でのlive validationは未実施（[Validation](validation.md)を参照）
+- Azure上でPPTX生成、Artifact publish／download、conversation再表示までlive
+  validation済み（[Validation](validation.md)を参照）
 
 ## 6. 1 回の message request
 
@@ -302,7 +303,8 @@ TCP 到達性です。Copilot の authentication や storage data plane の正�
 - Headless GitHub Copilot CLI が Copilot authentication を管理する
 - `COPILOT_CONNECTION_TOKEN` は Web と CLI の接続にだけ使用する
 - Token を browser、storage、API payload、log に保存しない
-- `CopilotClientMode.Empty` と空の `AvailableTools` を使用する
+- `CopilotClientMode.Empty` と明示的なcustom tool allow-listを使用し、host
+  filesystemや汎用shellを公開しない
 - `/api/health` は Container Apps probe のため user sign-in の対象外とする
 
 Local 実行には user authentication を適用しません。Microsoft Entra ID sign-in は
@@ -310,7 +312,6 @@ Azure Container Apps deployment にだけ構成します。
 
 ## 11. 現在の制約
 
-- Artifact store は contract と cleanup までで、Web API には未配線
 - Azure Storage mode はMulti-node semanticsの検証用で、production-grade運用は対象外
 - Application roleベースのauthorizationは未実装
 - Ownership導入前にAzure Table Storageのlegacy partitionへ保存されたsessionは、新しい
@@ -321,7 +322,7 @@ Azure Container Apps deployment にだけ構成します。
 - SQL Server と Azure Cosmos DB は未実装
 - Python code実行（dynamic sessions）は1回の実行が最大220秒、poolのegressは無効、
   sandboxにStorage credentialを渡さない設計。Data-plane APIは`2025-10-02-preview`の
-  previewであり、Azure上でのlive validationは未実施
+  preview。Azure上でPPTX生成とArtifact downloadまでlive validation済み
 
 検証条件と結果は [Validation](validation.md) を参照してください。
 

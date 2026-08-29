@@ -60,7 +60,8 @@ Application側の制約は次のとおりです。詳細は
 - 1回のcode実行は最大220秒（built-in code interpreterのhard limit）
 - Sandboxのegressは無効。外部APIやpackage registryへのnetwork呼び出しは失敗する
 - Sandboxにcredentialを注入しないため、SessionFSやArtifact Blobへの直接アクセスはできない
-- 現時点でAzure上のlive validationは未実施（`docs/validation.md`を参照）
+- Azure上で直接REST APIとchat経由のPPTX生成、Artifact publish／downloadまで検証済み
+  （`docs/validation.md`を参照）
 
 
 

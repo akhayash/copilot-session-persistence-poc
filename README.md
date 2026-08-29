@@ -46,7 +46,7 @@ built-in code interpreterの上限である最大220秒です。Data-plane API�
 `2025-10-02-preview`のpreview API versionを使用します。詳細は
 [Architecture](docs/architecture.md)と
 [Azure Container Apps deployment](infra/container-apps/README.md#python-dynamic-session-pool)
-を参照してください。この構成のAzure上でのlive validationは未実施です。
+を参照してください。Azure上でPPTX生成とArtifact downloadまでlive validation済みです。
 
 Azure Storage mode では、各 Web node が専用の headless GitHub Copilot CLI runtime
 に接続します。Web node と runtime は別プロセスの 1:1 pair です。共有するのは
@@ -224,25 +224,26 @@ dotnet test CopilotSessionPersistencePoc.slnx `
 - Azure Blob lease による session lock
 - SQLite / Azure Blob Storage の diagnostics
 - Azure Blob Storage の Artifact store contract
+- Owner-scoped Artifact Web APIとchat画面からのupload／download
 - Azure Container Apps dynamic sessions（`PythonLTS`）によるPython code実行と、Azure
   Table Storage `executionjobs` での実行ジョブ状態管理
 
 対象外:
 
 - GitHub OAuth / GitHub App と application role ベースの authorization
-- Artifact の Web API と conversation metadata への組み込み
 - Production-grade fencing、multi-region scaling、backup、retention
 - SQL Server / Azure Cosmos DB implementation
 
-Python code実行のinfrastructure（session pool、role assignment、environment
-variable配線）はdeployment可能ですが、Azure上でのlive validationは未実施です。現在の
-data-plane API version（`2025-10-02-preview`）はpreviewであり、将来変更される可能性が
-あります。検証状況は [Validation](docs/validation.md) を参照してください。
+Python code実行のinfrastructureをAzureへdeploymentし、直接REST APIとchatからの
+PPTX生成、Artifact Blobへのpublish、download、conversation再表示までlive validation
+済みです。現在のdata-plane API version（`2025-10-02-preview`）はpreviewであり、
+将来変更される可能性があります。検証状況は [Validation](docs/validation.md) を
+参照してください。
 
 ## Security
 
-- `CopilotClientMode.Empty` と空の `AvailableTools` を使用し、agent に host filesystem、
-  network、shell tool を公開しません。
+- `CopilotClientMode.Empty` と明示的なcustom tool allow-listを使用し、agentにhost
+  filesystem、network、汎用shell toolを公開しません。
 - Credential と connection token を browser、database、API payload、log に保存しません。
 - Azure Container Apps deployment では built-in authentication が Microsoft Entra ID
   sign-inを要求します。Local実行にはuser authenticationを適用しません。

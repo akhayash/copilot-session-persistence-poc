@@ -143,11 +143,11 @@ Azure Container Apps built-in authenticationを有効化しました。
 - Application client ID、issuer、callback URIの反映: 確認済み
 - Container App revision: Healthy
 
-Interactive sign-in後のchat操作を含むbrowser E2Eは未実施です。
+Interactive sign-in後のchat操作を含むbrowser E2Eを2026-08-30に実施しました。
 Final templateはprincipal allow-listを設定せず、application registrationを所有するtenantの
-userをauthentication対象にしています。2026-08-28のlive testはsign-in redirectの確認であり、
-interactive browser E2Eは未実施です。Application-level isolationは
-`X-MS-CLIENT-PRINCIPAL-ID`をowner keyにしたAPI contract testで検証します。
+userをauthentication対象にしています。別user間のlive browser isolationは未実施です。
+Application-level isolationは`X-MS-CLIENT-PRINCIPAL-ID`をowner keyにしたAPI contract
+testで検証します。
 
 ## 7. Python code実行（dynamic sessions）
 
@@ -163,7 +163,29 @@ container、dynamic pool management、`EgressDisabled`）とAzure Table Storage
 - Web identityにはsession poolへscopeしたbuilt-in
   `Azure ContainerApps Session Executor`ロールのみを付与する
 
-**この構成のAzure上でのlive validationは未実施です。** Session pool、role
-assignment、environment variableの配線はBicep buildで構文検証済みですが、実際の
-Azure subscriptionへのdeployment、code実行のsmoke test、cold start latencyの計測は
-まだ行っていません。実施後は本sectionに条件と結果を追記します。
+### 2026-08-30 live validation
+
+Azure subscriptionへsession pool、role assignment、`executionjobs` Table、Web revisionを
+deploymentし、次の順で確認しました。
+
+1. Chatを介さずDynamic Sessions REST APIを直接呼び、`/mnt/data/probe.txt`を作成
+2. Live file-list responseが`name`、`type: "file"`、`sizeInBytes`に加え、root directoryを
+   `directory: "."`として返すことを確認
+3. `python-pptx`で3-slide、30,061 bytesのPPTXをsandbox内に生成
+4. File APIから同一sizeでdownloadし、Open XML package validationとslide XML 3件を確認
+5. LibreOfficeで3-page PDFへ変換し、各slideを画像化してvisual inspectionを実施
+6. Microsoft Entra IDでWebへinteractive sign-inし、chatの`execute_python`から
+   `chat-integration-test.pptx`を生成
+7. Artifact一覧に30 KBのPPTXが表示され、Web APIからdownloadできることを確認
+8. DownloadしたPPTXのOpen XML validation、3-slide render、SHA-256取得を実施
+9. Page reload後に過去conversationとArtifact linkが再表示されることを確認
+
+初回試験ではclientがroot directoryを空文字だけに限定していたため、live serviceが返す
+`"."`を除外し、sandbox内で生成済みのfileをArtifactへpublishできませんでした。
+`AzureDynamicSessionsClient`を空文字と`"."`の両方へ対応させ、live responseと同じcontract
+をunit testへ固定しました。
+
+Chat統合前に直接REST probeとPPTX package検証を行うことで、Dynamic Sessions、
+file-list contract、download、PPTX生成、Artifact broker、Copilot tool invocationを
+段階的に切り分けています。Cold start latencyの継続的な計測と別user間のlive isolationは
+未実施です。
