@@ -181,7 +181,7 @@ public sealed class DynamicSessionsClientTests
                     "value": [
                       {
                         "name": "first.csv",
-                        "directory": "",
+                        "directory": ".",
                         "type": "File",
                         "sizeInBytes": 1
                       }

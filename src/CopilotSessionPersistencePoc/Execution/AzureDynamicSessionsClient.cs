@@ -252,7 +252,7 @@ public sealed class AzureDynamicSessionsClient(
         long? size = item.SizeInBytes ?? item.Properties?.Size;
         if (type is null
             || !type.Equals("File", StringComparison.OrdinalIgnoreCase)
-            || !string.IsNullOrEmpty(item.Directory))
+            || item.Directory is not (null or "" or "."))
         {
             return null;
         }
