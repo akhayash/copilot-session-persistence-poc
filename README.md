@@ -48,6 +48,11 @@ built-in code interpreterの上限である最大220秒です。Data-plane API�
 [Azure Container Apps deployment](infra/container-apps/README.md#python-dynamic-session-pool)
 を参照してください。Azure上でPPTX生成とArtifact downloadまでlive validation済みです。
 
+Chat利用者がDynamic Sessions、`execute_python`、Azure Storage、`/mnt/data`を指定する
+必要はありません。たとえば「この内容を日本語のPowerPoint 3枚にまとめ、download
+できるようにしてください」のように成果物だけを依頼します。Application側のsystem
+messageが実行方法と保存先をmodelへ指示し、生成したPPTXを画面のArtifacts欄へ表示します。
+
 Azure Storage mode では、各 Web node が専用の headless GitHub Copilot CLI runtime
 に接続します。Web node と runtime は別プロセスの 1:1 pair です。共有するのは
 runtime ではなく、Azure Storage に保存したデータです。

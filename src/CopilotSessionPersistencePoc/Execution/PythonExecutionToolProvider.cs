@@ -57,8 +57,11 @@ public sealed class PythonExecutionToolProvider(
             {
                 Name = "execute_python",
                 Description =
-                    "Run Python in an isolated Azure Container Apps dynamic session. "
-                    + "Read inputs from /mnt/data and write result files to /mnt/data.",
+                    "Run Python with common data and document packages, including "
+                    + "python-pptx, in an isolated environment. Packages are preinstalled; "
+                    + "do not run pip. Read inputs from /mnt/data and write every "
+                    + "downloadable result directly under /mnt/data. Files written under "
+                    + "/session-state are not returned.",
             }),
     ];
 

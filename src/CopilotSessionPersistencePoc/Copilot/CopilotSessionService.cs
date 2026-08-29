@@ -210,6 +210,7 @@ public sealed class CopilotSessionService(
                 .ToArray(),
             EnableSessionStore = false,
             OnPermissionRequest = PermissionHandler.ApproveAll,
+            SystemMessage = CreateSystemMessage(),
             CreateSessionFsProvider = context =>
                 sessionFsProviders.Create(context.SessionId),
         };
@@ -227,10 +228,17 @@ public sealed class CopilotSessionService(
                 .ToArray(),
             EnableSessionStore = false,
             OnPermissionRequest = PermissionHandler.ApproveAll,
+            SystemMessage = CreateSystemMessage(),
             CreateSessionFsProvider = context =>
                 sessionFsProviders.Create(context.SessionId),
         };
     }
+
+    private SystemMessageConfig CreateSystemMessage() => new()
+    {
+        Mode = SystemMessageMode.Append,
+        Content = options.Value.SystemMessage,
+    };
 
     private AIFunction[] CreateTools(string sessionId) =>
         toolProviders
