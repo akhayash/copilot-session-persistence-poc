@@ -30,6 +30,8 @@ npm run build
 - Application metadata の optimistic concurrency
 - SQLite migrationとauthenticated user間のsession isolation
 - Diagnostics preview と redaction
+- PowerPoint worker manifest、PPTX/PDF/PNG/JSON signature、SHA-256、size、slide count
+- Presentation session cleanup timeout、invalid outputのpublish拒否
 
 ## 3. Local restart verification
 
@@ -102,8 +104,8 @@ Process exit code: 0
   による stale writer の拒否は未検証かつ未実装です。
 - SessionFS は session ごとの単一 `state.json` Blob であり、large session の性能、
   retention、backup、multi-region behavior は検証対象外です。
-- Artifact store は contract と cleanup を検証しています。Web API と conversation
-  metadata への配線は実装・検証対象外です。
+- PowerPoint contentは構造化されたtitle/body/highlightから生成します。任意templateの
+  upload／再編集、chartやimageの自動生成は検証対象外です。
 
 ## 6. Azure Container Apps deployment
 
@@ -189,3 +191,32 @@ Chat統合前に直接REST probeとPPTX package検証を行うことで、Dynami
 file-list contract、download、PPTX生成、Artifact broker、Copilot tool invocationを
 段階的に切り分けています。Cold start latencyの継続的な計測と別user間のlive isolationは
 未実施です。
+
+## 8. PowerPoint Skillとcustom container session
+
+2026-08-30に、PowerPoint専用のAzure Container Apps custom container session poolと
+review済みGitHub Copilot Skillをdeploymentし、次の順で検証しました。
+
+1. Worker imageをAzure Container Registryでbuild
+2. `CustomContainer` session poolを`EgressDisabled`、image pull identity
+   `lifecycle: None`、ready instance 1で作成
+3. 検証時だけ現在のAzure userへpool限定の`Azure ContainerApps Session Executor`
+   roleを付与し、Worker APIをChatから切り離して直接probe
+4. `POST /presentations`から3-slideのPPTX、PDF、3 PNG、`validation.json`を生成
+5. Manifestの全fileについてsizeとSHA-256をdownload後のbytesと照合
+6. PPTXのOpen XML package、manifest／package／audit JSONのslide count 3を照合
+7. Render済みPNGをfresh-eyes reviewし、title decoration、余白、footer、highlight
+   layoutを修正して再build／再deployment
+8. 再生成した全6 Artifactのvalidationとhashを再確認。Visual reviewでblocking defectなし
+9. 一時的に付与したuser role assignmentを削除し、Web managed identityだけに
+   pool-scoped Session Executor roleを残した
+10. 通常の自然文だけで3枚の日本語PowerPointを依頼
+11. SessionFS eventで`custom:create_presentation`のtool invocationを確認
+12. Artifact BlobへPPTX、PDF、3 PNG、validation JSONがpublishされ、Web UIへ表示
+13. Page reload後もconversationと6 Artifactが再表示されることを確認
+
+Web側のtrust boundaryでは、manifestのfilename、extension、MIME type、file count、
+size、aggregate size、SHA-256に加え、PPTXのZIP/Open XML members、PDF／PNG signature、
+JSON parseを再検証します。全fileをdownload・検証してからpublishし、途中のBlob uploadが
+失敗した場合はjob単位でrollbackします。SandboxへStorage credential、SAS、managed
+identityは渡していません。

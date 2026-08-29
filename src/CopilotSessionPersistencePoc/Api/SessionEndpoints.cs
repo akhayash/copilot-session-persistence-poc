@@ -425,6 +425,7 @@ public static class SessionEndpoints
         IOptions<CopilotOptions> options,
         IOptions<PersistenceOptions> persistence,
         IOptions<DynamicSessionsOptions> dynamicSessions,
+        IOptions<PresentationSessionsOptions> presentationSessions,
         CancellationToken cancellationToken)
     {
         Uri cliUrl = options.Value.CliUrl;
@@ -437,7 +438,10 @@ public static class SessionEndpoints
                     "healthy",
                     persistence.Value.Backend,
                     "reachable",
-                    dynamicSessions.Value.Enabled ? "DynamicSessions" : "disabled"));
+                    dynamicSessions.Value.Enabled ? "DynamicSessions" : "disabled",
+                    presentationSessions.Value.Enabled
+                        ? "CustomContainerSessions"
+                        : "disabled"));
         }
         catch (SocketException)
         {
@@ -446,7 +450,10 @@ public static class SessionEndpoints
                     "degraded",
                     persistence.Value.Backend,
                     "unreachable",
-                    dynamicSessions.Value.Enabled ? "DynamicSessions" : "disabled"),
+                    dynamicSessions.Value.Enabled ? "DynamicSessions" : "disabled",
+                    presentationSessions.Value.Enabled
+                        ? "CustomContainerSessions"
+                        : "disabled"),
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
     }

@@ -20,6 +20,11 @@ public interface IArtifactStore
         string fileName,
         CancellationToken cancellationToken = default);
 
+    Task DeleteAsync(
+        string sessionId,
+        string artifactId,
+        CancellationToken cancellationToken = default);
+
     Task DeleteSessionAsync(
         string sessionId,
         CancellationToken cancellationToken = default);

@@ -35,7 +35,8 @@ public sealed record HealthResponse(
     string Status,
     string Persistence,
     string CopilotCli,
-    string PythonExecution);
+    string PythonExecution,
+    string PresentationExecution);
 
 public sealed record ArtifactResponse(
     string ArtifactId,

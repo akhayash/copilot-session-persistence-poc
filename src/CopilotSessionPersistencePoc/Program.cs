@@ -74,12 +74,28 @@ builder.Services
             > TimeSpan.FromSeconds(options.ExecutionTimeoutSeconds + 30),
         "DynamicSessions:StaleJobTimeout must exceed ExecutionTimeoutSeconds by more than 30 seconds.")
     .ValidateOnStart();
+builder.Services
+    .AddOptions<PresentationSessionsOptions>()
+    .Bind(builder.Configuration.GetSection(PresentationSessionsOptions.SectionName))
+    .ValidateDataAnnotations()
+    .Validate(
+        static options => !options.Enabled
+            || options.PoolManagementEndpoint is { IsAbsoluteUri: true },
+        "PresentationSessions:PoolManagementEndpoint must be absolute when enabled.")
+    .ValidateOnStart();
 bool enableDynamicSessions = builder.Configuration.GetValue<bool>(
     $"{DynamicSessionsOptions.SectionName}:Enabled");
+bool enablePresentationSessions = builder.Configuration.GetValue<bool>(
+    $"{PresentationSessionsOptions.SectionName}:Enabled");
 if (enableDynamicSessions && !useAzureStorage)
 {
     throw new InvalidOperationException(
         "Dynamic Sessions requires Persistence:Backend=AzureStorage.");
+}
+if (enablePresentationSessions && !useAzureStorage)
+{
+    throw new InvalidOperationException(
+        "Presentation Sessions requires Persistence:Backend=AzureStorage.");
 }
 
 if (useAzureStorage)
@@ -100,6 +116,14 @@ if (useAzureStorage)
         builder.Services.AddHttpClient<IDynamicSessionsClient, AzureDynamicSessionsClient>();
         builder.Services.AddScoped<PythonExecutionCoordinator>();
         builder.Services.AddScoped<ICopilotToolProvider, PythonExecutionToolProvider>();
+    }
+    if (enablePresentationSessions)
+    {
+        builder.Services.AddHttpClient<
+            IPresentationSessionsClient,
+            AzurePresentationSessionsClient>();
+        builder.Services.AddScoped<PresentationExecutionCoordinator>();
+        builder.Services.AddScoped<ICopilotToolProvider, PresentationToolProvider>();
     }
 }
 else

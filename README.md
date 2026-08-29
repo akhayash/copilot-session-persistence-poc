@@ -28,11 +28,13 @@ React + ASP.NET Core アプリケーションです。
 2つのmodeは排他的です。`Persistence:Backend`を起動時に一度だけ評価し、SQLite一式
 またはAzure Storage一式のどちらかだけをdependency injectionへ登録します。
 
-## Python code実行と3つのstorageの違い
+## Python／PowerPoint実行と3つのstorageの違い
 
 Agentが生成したPython codeは、SessionFSやArtifactとは別のAzure Container Apps
-dynamic sessions（`PythonLTS`built-in container）で実行します。3つの保存領域は
-役割が異なります。
+dynamic sessions（`PythonLTS`built-in container）で実行します。PowerPoint生成は
+review済みのSkillと`create_presentation` toolを使い、Python、LibreOffice、Noto CJK
+fontを組み込んだcustom container sessionへ構造化されたslide contentだけを渡します。
+3つの保存領域は役割が異なります。
 
 | | SessionFS | Dynamic sessionのsandbox workspace | Artifact Blob |
 | --- | --- | --- | --- |
@@ -41,8 +43,8 @@ dynamic sessions（`PythonLTS`built-in container）で実行します。3つの�
 | 保存先 | SQLite / Azure Blob Storage | Azure Container Apps dynamic session（Microsoft管理、非永続） | Azure Blob Storage |
 | Credential | Application managed identityが管理 | Sandbox containerにはStorage credentialを渡さない | Application managed identityが管理 |
 
-Dynamic sessionはEgress無効（外部networkへ到達不可）で動作し、1回のcode実行は
-built-in code interpreterの上限である最大220秒です。Data-plane APIは現時点で
+どちらのdynamic sessionもEgress無効（外部networkへ到達不可）です。Python codeの
+1回の実行はbuilt-in code interpreterの上限である最大220秒です。Data-plane APIは現時点で
 `2025-10-02-preview`のpreview API versionを使用します。詳細は
 [Architecture](docs/architecture.md)と
 [Azure Container Apps deployment](infra/container-apps/README.md#python-dynamic-session-pool)
@@ -51,7 +53,9 @@ built-in code interpreterの上限である最大220秒です。Data-plane API�
 Chat利用者がDynamic Sessions、`execute_python`、Azure Storage、`/mnt/data`を指定する
 必要はありません。たとえば「この内容を日本語のPowerPoint 3枚にまとめ、download
 できるようにしてください」のように成果物だけを依頼します。Application側のsystem
-messageが実行方法と保存先をmodelへ指示し、生成したPPTXを画面のArtifacts欄へ表示します。
+messageとPPTX Skillが実行方法をmodelへ指示します。`create_presentation` toolは
+PPTX、rendered PDF、slide PNG、validation manifestを生成し、画面のArtifacts欄へ
+表示します。`python`、`node`、`libreoffice`のようなcommand単位のtoolは公開しません。
 
 Azure Storage mode では、各 Web node が専用の headless GitHub Copilot CLI runtime
 に接続します。Web node と runtime は別プロセスの 1:1 pair です。共有するのは

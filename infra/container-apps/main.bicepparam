@@ -10,10 +10,13 @@ param acrSubscriptionId = readEnvironmentVariable('AZURE_SUBSCRIPTION_ID')
 param webImage = readEnvironmentVariable('SESSIONFS_WEB_IMAGE')
 param copilotCliImage = readEnvironmentVariable('COPILOT_CLI_IMAGE')
 param validatorImage = readEnvironmentVariable('SESSIONFS_VALIDATOR_IMAGE')
+param presentationWorkerImage = readEnvironmentVariable('PRESENTATION_WORKER_IMAGE')
 
 param minReplicas = 0
 param maxReplicas = 2
 param deployWebApp = true
+param enablePresentationSessions = true
+param presentationReadySessionInstances = 1
 
 param sessionPoolCooldownPeriodInSeconds = 300
 param sessionPoolMaxConcurrentSessions = 5

@@ -26,6 +26,9 @@ param copilotCliImage string
 @description('Storage integration validator image, including tag.')
 param validatorImage string
 
+@description('Custom presentation worker image, including tag.')
+param presentationWorkerImage string = ''
+
 @description('GitHub token used by the headless Copilot CLI.')
 @secure()
 param copilotGitHubToken string
@@ -56,6 +59,14 @@ param maxReplicas int = 2
 
 @description('Deploy the Web chat Container App. The validation Job is always deployed.')
 param deployWebApp bool = true
+
+@description('Deploy and enable the custom presentation session pool.')
+param enablePresentationSessions bool = false
+
+@description('Ready custom presentation workers kept idle. Custom pools require at least one.')
+@minValue(1)
+@maxValue(300)
+param presentationReadySessionInstances int = 1
 
 @description('Cooldown period in seconds before an idle Python dynamic session container is reclaimed.')
 @minValue(300)
@@ -112,6 +123,10 @@ var sessionExecutorRoleId = subscriptionResourceId(
 // environmentName collapses to very few alphanumeric characters.
 var sessionPoolName = take(
   'sp${replace(normalizedEnvironmentName, '-', '')}${uniqueString(subscription().id, resourceGroup().id, 'sessionpool')}',
+  63
+)
+var presentationSessionPoolName = take(
+  'sppptx${replace(normalizedEnvironmentName, '-', '')}${uniqueString(subscription().id, resourceGroup().id, 'presentationpool')}',
   63
 )
 
@@ -428,6 +443,76 @@ resource sessionPoolExecutorRole 'Microsoft.Authorization/roleAssignments@2022-0
   }
 }
 
+// Custom container sessions expose the worker's HTTP API rather than the PythonLTS
+// executions/files contract. The image contains all document dependencies because
+// session egress is disabled. The pull identity is not available inside the sandbox.
+resource presentationSessionPool 'Microsoft.App/sessionPools@2025-07-01' = if (enablePresentationSessions) {
+    name: presentationSessionPoolName
+    location: location
+    identity: {
+      type: 'UserAssigned'
+      userAssignedIdentities: {
+        '${identity.id}': {}
+      }
+    }
+    properties: {
+      containerType: 'CustomContainer'
+      poolManagementType: 'Dynamic'
+      environmentId: managedEnvironment.id
+      customContainerTemplate: {
+        containers: [
+          {
+            name: 'presentation-worker'
+            image: presentationWorkerImage
+            resources: {
+              cpu: json('1.0')
+              memory: '2Gi'
+            }
+          }
+        ]
+        ingress: {
+          targetPort: 8080
+        }
+        registryCredentials: {
+          server: acr.properties.loginServer
+          identity: identity.id
+        }
+      }
+      managedIdentitySettings: [
+        {
+          identity: identity.id
+          lifecycle: 'None'
+        }
+      ]
+      scaleConfiguration: {
+        maxConcurrentSessions: sessionPoolMaxConcurrentSessions
+        readySessionInstances: presentationReadySessionInstances
+      }
+      dynamicPoolConfiguration: {
+        lifecycleConfiguration: {
+          lifecycleType: 'Timed'
+          cooldownPeriodInSeconds: sessionPoolCooldownPeriodInSeconds
+        }
+      }
+      sessionNetworkConfiguration: {
+        status: 'EgressDisabled'
+      }
+    }
+    dependsOn: [
+      acrPullRole
+    ]
+  }
+
+resource presentationSessionPoolExecutorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enablePresentationSessions) {
+    name: guid(presentationSessionPool!.id, identity.id, sessionExecutorRoleId)
+    scope: presentationSessionPool
+    properties: {
+      principalId: identity.properties.principalId
+      principalType: 'ServicePrincipal'
+      roleDefinitionId: sessionExecutorRoleId
+  }
+}
+
 resource webApp 'Microsoft.App/containerApps@2025-07-01' = if (deployWebApp) {
   name: webAppName
   location: location
@@ -517,8 +602,32 @@ resource webApp 'Microsoft.App/containerApps@2025-07-01' = if (deployWebApp) {
               value: '2025-10-02-preview'
             }
             {
+              name: 'PresentationSessions__Enabled'
+              value: string(enablePresentationSessions)
+            }
+            {
+              name: 'PresentationSessions__PoolManagementEndpoint'
+              value: enablePresentationSessions ? presentationSessionPool!.properties.poolManagementEndpoint : ''
+            }
+            {
+              name: 'PresentationSessions__ApiVersion'
+              value: '2025-02-02-preview'
+            }
+            {
+              name: 'PresentationSessions__RequestTimeoutSeconds'
+              value: '240'
+            }
+            {
               name: 'Copilot__CliUrl'
               value: 'http://localhost:4321'
+            }
+            {
+              name: 'Copilot__ResponseTimeout'
+              value: '00:05:00'
+            }
+            {
+              name: 'Copilot__SkillDirectories__0'
+              value: '/opt/copilot-skills'
             }
             {
               name: 'AZURE_CLIENT_ID'
@@ -592,6 +701,7 @@ resource webApp 'Microsoft.App/containerApps@2025-07-01' = if (deployWebApp) {
   dependsOn: [
     acrPullRole
     blobDnsZoneGroup
+    presentationSessionPoolExecutorRole
     sessionPoolExecutorRole
     storageBlobRole
     storageTableRole
@@ -703,6 +813,8 @@ output tableServiceUri string = storage.properties.primaryEndpoints.table
 output containerAppsEnvironmentName string = managedEnvironment.name
 output sessionPoolName string = sessionPool.name
 output sessionPoolManagementEndpoint string = sessionPool.properties.poolManagementEndpoint
+output presentationSessionPoolName string = enablePresentationSessions ? presentationSessionPool!.name : ''
+output presentationSessionPoolManagementEndpoint string = enablePresentationSessions ? presentationSessionPool!.properties.poolManagementEndpoint : ''
 output webAppName string = deployWebApp ? webApp!.name : ''
 output webAppUrl string = deployWebApp ? 'https://${webApp!.properties.configuration.ingress.fqdn}' : ''
 output validationJobName string = validationJob.name

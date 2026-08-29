@@ -1,0 +1,7 @@
+fastapi==0.116.1
+uvicorn==0.35.0
+python-pptx==1.0.2
+PyMuPDF==1.26.4
+pydantic==2.11.7
+pytest==8.4.1
+httpx==0.28.1

@@ -7,6 +7,8 @@
 | --- | --- | --- |
 | Chat UI / API + Copilot CLI sidecar | Azure Container App | HTTP、0～2 replicas |
 | Blob/Table integration validator | Azure Container Apps Job | Manual、実行時のみ1 replica |
+| Python code interpreter | Azure Container Apps dynamic session pool | Jobごとのephemeral session |
+| PowerPoint worker | Azure Container Apps custom container session pool | Jobごとのephemeral session |
 
 Web replicaごとにASP.NET Core containerとheadless GitHub Copilot CLI sidecarが
 一緒に起動します。各replicaは独立したCLI runtimeを持ち、conversation state、
@@ -63,7 +65,32 @@ Application側の制約は次のとおりです。詳細は
 - Azure上で直接REST APIとchat経由のPPTX生成、Artifact publish／downloadまで検証済み
   （`docs/validation.md`を参照）
 
+## PowerPoint custom container session pool
 
+PowerPoint生成用に、`CustomContainer` typeのsession poolをPython poolとは別に作成します。
+Worker imageにはPython、`python-pptx`、LibreOffice Impress、Noto CJK font、PyMuPDF、
+FastAPIを組み込みます。Runtimeでpackage installは行いません。
+
+| 項目 | 設定 |
+| --- | --- |
+| Container type | `CustomContainer` |
+| Worker API | `POST /presentations`、`GET /artifacts/{fileName}` |
+| Output | PPTX、PDF、slide PNG、validation JSON |
+| Network | `EgressDisabled` |
+| Identity | ACR pullだけに使用し、session内では`lifecycle: None` |
+| Ready instance数 | `presentationReadySessionInstances`。Custom poolの制約により1以上 |
+| Copilot surface | `custom:create_presentation`。個別command toolは非公開 |
+
+Copilot CLI sidecar imageには`/opt/copilot-skills/presentation/SKILL.md`を含め、
+Webは`Copilot__SkillDirectories__0=/opt/copilot-skills`をsession create／resumeの
+両方へ設定します。`enablePresentationSessions=false`ではpool、RBAC、Web側toolを
+無効化でき、`presentationWorkerImage`も不要です。
+
+Custom container session poolはplatform制約により`readySessionInstances`を1以上にする
+必要があります。このrepositoryのdeployment parameterは機能実証のため
+`enablePresentationSessions=true`、`presentationReadySessionInstances=1`であり、
+1 vCPU／2 GiBのworker 1台分のidle compute costが継続します。不要な環境では明示的に
+featureを無効化してください。
 
 Microsoft Entra IDでWeb application用のapplication registrationを1つ作成します。
 Azure resourceと別tenantのregistrationも使用できます。
@@ -158,6 +185,11 @@ az acr build `
   --registry <registry-name> `
   --image <validator-image>:<tag> `
   --file tests\Dockerfile.azure-integration .
+
+az acr build `
+  --registry <registry-name> `
+  --image <presentation-worker-image>:<tag> `
+  --file presentation-worker\Dockerfile presentation-worker
 ```
 
 GitHub Copilot CLIには公式pre-built container imageがないため、GitHub release binary
@@ -174,6 +206,7 @@ $env:ACR_RESOURCE_GROUP = '<registry-resource-group>'
 $env:SESSIONFS_WEB_IMAGE = '<registry>.azurecr.io/sessionfs-web:<tag>'
 $env:COPILOT_CLI_IMAGE = '<registry>.azurecr.io/copilot-cli:<tag>'
 $env:SESSIONFS_VALIDATOR_IMAGE = '<registry>.azurecr.io/sessionfs-validator:<tag>'
+$env:PRESENTATION_WORKER_IMAGE = '<registry>.azurecr.io/presentation-worker:<tag>'
 $env:WEB_AUTH_TENANT_ID = '<directory-tenant-id>'
 $env:WEB_AUTH_CLIENT_ID = '<application-client-id>'
 $env:WEB_AUTH_CLIENT_SECRET = '<client-secret>'
@@ -196,6 +229,7 @@ Remove-Item Env:\ACR_RESOURCE_GROUP
 Remove-Item Env:\SESSIONFS_WEB_IMAGE
 Remove-Item Env:\COPILOT_CLI_IMAGE
 Remove-Item Env:\SESSIONFS_VALIDATOR_IMAGE
+Remove-Item Env:\PRESENTATION_WORKER_IMAGE
 Remove-Item Env:\WEB_AUTH_TENANT_ID
 Remove-Item Env:\WEB_AUTH_CLIENT_ID
 Remove-Item Env:\WEB_AUTH_CLIENT_SECRET

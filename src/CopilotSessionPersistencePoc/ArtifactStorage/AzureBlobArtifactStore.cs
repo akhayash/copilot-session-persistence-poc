@@ -156,6 +156,27 @@ public sealed class AzureBlobArtifactStore(
         }
     }
 
+    public async Task DeleteAsync(
+        string sessionId,
+        string artifactId,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateSegment(sessionId, nameof(sessionId));
+        ValidateSegment(artifactId, nameof(artifactId));
+        string prefix = $"{GetSessionPrefix(sessionId)}{Uri.EscapeDataString(artifactId)}/";
+        await foreach (BlobItem blob in container.GetBlobsAsync(
+            BlobTraits.None,
+            BlobStates.None,
+            prefix: prefix,
+            cancellationToken: cancellationToken))
+        {
+            await container.DeleteBlobIfExistsAsync(
+                blob.Name,
+                DeleteSnapshotsOption.IncludeSnapshots,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     public async Task DeleteSessionAsync(
         string sessionId,
         CancellationToken cancellationToken = default)

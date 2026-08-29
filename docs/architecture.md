@@ -174,6 +174,38 @@ cold start latencyが発生します。
 - Azure上でPPTX生成、Artifact publish／download、conversation再表示までlive
   validation済み（[Validation](validation.md)を参照）
 
+### 5.7 PowerPoint Skillとcustom container session
+
+PowerPoint生成では、GitHub Copilot SDKの`EnableSkills`と`SkillDirectories`を使って
+review済みの`presentation` Skillをheadless GitHub Copilot CLIへ読み込みます。
+Skillはstoryline、content fidelity、slide数、completion contractを定義しますが、
+commandやcredentialは持ちません。
+
+Modelへ公開するのは`custom:create_presentation`というdomain-level toolです。
+`python`、`node`、`libreoffice`、shell commandを個別toolとして公開しません。
+Toolはtitle、audience、slide title／body／highlightを受け取り、server側で生成した
+random identifierを使ってPowerPoint専用custom container sessionを呼びます。
+
+```text
+Natural-language request
+  -> presentation Skill
+  -> custom:create_presentation (structured content only)
+  -> custom container session HTTP API
+       -> python-pptx
+       -> LibreOffice PDF render
+       -> PyMuPDF slide PNG render
+       -> Open XML / slide-count validation
+  -> Web verifies file size and SHA-256
+  -> owner-scoped Artifact Blob
+```
+
+Custom container sessionは`PythonLTS`の`/executions`／`/files` APIを使いません。
+Image内のHTTP serverが`POST /presentations`と`GET /artifacts/{fileName}`を提供し、
+Container Appsのpool management endpointが同じidentifierのsessionへrequestをroute
+します。Image pull用managed identityのlifecycleは`None`とし、sandbox内へAzure
+identityやStorage credentialを公開しません。Runtime dependencyはimageへversion固定で
+組み込み、poolのnetworkは`EgressDisabled`にします。
+
 ## 6. 1 回の message request
 
 ```mermaid

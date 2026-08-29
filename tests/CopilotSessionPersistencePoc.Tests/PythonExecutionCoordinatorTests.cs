@@ -344,6 +344,24 @@ public sealed class PythonExecutionCoordinatorTests
             return Task.FromResult(content);
         }
 
+        public Task DeleteAsync(
+            string sessionId,
+            string artifactId,
+            CancellationToken cancellationToken = default)
+        {
+            foreach (string key in contents
+                .Where(pair =>
+                    pair.Value.Info.SessionId == sessionId
+                    && pair.Value.Info.ArtifactId == artifactId)
+                .Select(static pair => pair.Key)
+                .ToArray())
+            {
+                contents.Remove(key);
+            }
+
+            return Task.CompletedTask;
+        }
+
         public Task DeleteSessionAsync(
             string sessionId,
             CancellationToken cancellationToken = default) =>

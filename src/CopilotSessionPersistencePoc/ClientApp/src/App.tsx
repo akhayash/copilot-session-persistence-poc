@@ -27,6 +27,7 @@ type SessionDetails = {
 type Health = {
   persistence: string
   pythonExecution: string
+  presentationExecution: string
 }
 
 type Artifact = {
@@ -48,6 +49,7 @@ function App() {
   const [inspectorRefreshKey, setInspectorRefreshKey] = useState(0)
   const [persistenceBackend, setPersistenceBackend] = useState('SQLite')
   const [pythonExecution, setPythonExecution] = useState('disabled')
+  const [presentationExecution, setPresentationExecution] = useState('disabled')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
 
   const refreshSessions = useCallback(async () => {
@@ -75,6 +77,7 @@ function App() {
       .then((health) => {
         setPersistenceBackend(health.persistence)
         setPythonExecution(health.pythonExecution)
+        setPresentationExecution(health.presentationExecution)
       })
       .catch(() => undefined)
   }, [refreshSessions])
@@ -237,6 +240,9 @@ function App() {
                 : 'SQLite metadata + SessionFS'}
             </span>
             {pythonExecution !== 'disabled' && <span>Python: {pythonExecution}</span>}
+            {presentationExecution !== 'disabled' && (
+              <span>PowerPoint: {presentationExecution}</span>
+            )}
           </div>
         </div>
       </aside>

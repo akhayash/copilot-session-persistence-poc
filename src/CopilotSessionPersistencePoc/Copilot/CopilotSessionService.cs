@@ -208,6 +208,8 @@ public sealed class CopilotSessionService(
             AvailableTools = tools
                 .Select(static tool => $"custom:{tool.Name}")
                 .ToArray(),
+            EnableSkills = options.Value.SkillDirectories.Length > 0,
+            SkillDirectories = options.Value.SkillDirectories,
             EnableSessionStore = false,
             OnPermissionRequest = PermissionHandler.ApproveAll,
             SystemMessage = CreateSystemMessage(),
@@ -226,6 +228,8 @@ public sealed class CopilotSessionService(
             AvailableTools = tools
                 .Select(static tool => $"custom:{tool.Name}")
                 .ToArray(),
+            EnableSkills = options.Value.SkillDirectories.Length > 0,
+            SkillDirectories = options.Value.SkillDirectories,
             EnableSessionStore = false,
             OnPermissionRequest = PermissionHandler.ApproveAll,
             SystemMessage = CreateSystemMessage(),

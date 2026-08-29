@@ -23,6 +23,12 @@ public sealed class UnavailableArtifactStore : IArtifactStore
         CancellationToken cancellationToken = default) =>
         throw new ArtifactStorageUnavailableException();
 
+    public Task DeleteAsync(
+        string sessionId,
+        string artifactId,
+        CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+
     public Task DeleteSessionAsync(
         string sessionId,
         CancellationToken cancellationToken = default) =>
