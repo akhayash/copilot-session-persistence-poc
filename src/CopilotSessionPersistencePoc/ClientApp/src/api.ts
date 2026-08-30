@@ -71,6 +71,11 @@ export async function downloadArtifact(
   document.body.appendChild(link)
 
   link.click()
-  link.remove()
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+
+  // Revoking the object URL in the same task can cancel a download that the browser has not
+  // committed yet, which then falls back to the object URL's identifier as the file name.
+  setTimeout(() => {
+    link.remove()
+    URL.revokeObjectURL(objectUrl)
+  }, 1_000)
 }
