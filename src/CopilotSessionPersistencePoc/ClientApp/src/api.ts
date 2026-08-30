@@ -49,11 +49,18 @@ export async function downloadArtifact(
 ): Promise<void> {
   const response = await fetch(
     `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(artifactId)}/${encodeURIComponent(fileName)}`,
+    { cache: 'no-store' },
   )
 
   if (!response.ok) {
     const problem = await response.json().catch(() => null)
     throw new Error(problem?.detail ?? problem?.title ?? `Download failed (${response.status})`)
+  }
+
+  // Easy Auth answers an expired session with a redirect to the sign-in page, which would
+  // otherwise be saved as a corrupt artifact instead of the requested bytes.
+  if (response.redirected || new URL(response.url, location.href).origin !== location.origin) {
+    throw new Error('Your sign-in expired. Reload the page and try the download again.')
   }
 
   const objectUrl = URL.createObjectURL(await response.blob())

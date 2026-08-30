@@ -7,6 +7,8 @@ using CopilotSessionPersistencePoc.Diagnostics;
 using CopilotSessionPersistencePoc.Execution;
 using CopilotSessionPersistencePoc.Persistence;
 using CopilotSessionPersistencePoc.SessionFs;
+using Microsoft.AspNetCore.StaticFiles;
+using Microsoft.Net.Http.Headers;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
@@ -143,10 +145,30 @@ builder.Services.AddScoped<CopilotSessionService>();
 WebApplication app = builder.Build();
 
 app.UseExceptionHandler();
+
+// The SPA shell must always revalidate so a redeployed client is picked up instead of a
+// cached older build, while Vite's content-hashed bundles can be cached indefinitely.
+StaticFileOptions staticFileOptions = new()
+{
+    OnPrepareResponse = static context =>
+    {
+        bool isHashedAsset = context.Context.Request.Path
+            .StartsWithSegments("/assets", StringComparison.OrdinalIgnoreCase);
+        context.Context.Response.GetTypedHeaders().CacheControl = isHashedAsset
+            ? new CacheControlHeaderValue
+            {
+                Public = true,
+                MaxAge = TimeSpan.FromDays(365),
+                Extensions = { new NameValueHeaderValue("immutable") },
+            }
+            : new CacheControlHeaderValue { NoCache = true, MustRevalidate = true };
+    },
+};
+
 app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseStaticFiles(staticFileOptions);
 app.MapSessionEndpoints();
-app.MapFallbackToFile("index.html");
+app.MapFallbackToFile("index.html", staticFileOptions);
 
 if (useAzureStorage)
 {
