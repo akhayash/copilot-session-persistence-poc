@@ -41,3 +41,29 @@ export async function uploadArtifact<T>(
 
   return response.json() as Promise<T>
 }
+
+export async function downloadArtifact(
+  sessionId: string,
+  artifactId: string,
+  fileName: string,
+): Promise<void> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(artifactId)}/${encodeURIComponent(fileName)}`,
+  )
+
+  if (!response.ok) {
+    const problem = await response.json().catch(() => null)
+    throw new Error(problem?.detail ?? problem?.title ?? `Download failed (${response.status})`)
+  }
+
+  const objectUrl = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = fileName
+  link.style.display = 'none'
+  document.body.appendChild(link)
+
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+}

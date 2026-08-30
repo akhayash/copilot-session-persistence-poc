@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
-import { apiRequest, uploadArtifact } from './api'
+import { apiRequest, downloadArtifact, uploadArtifact } from './api'
 import SessionInspector from './SessionInspector'
 import './App.css'
 
@@ -51,6 +51,7 @@ function App() {
   const [pythonExecution, setPythonExecution] = useState('disabled')
   const [presentationExecution, setPresentationExecution] = useState('disabled')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
+  const [downloadingArtifactId, setDownloadingArtifactId] = useState<string | null>(null)
 
   const refreshSessions = useCallback(async () => {
     const data = await apiRequest<Session[]>('/api/sessions')
@@ -195,6 +196,22 @@ function App() {
     }
   }
 
+  async function saveArtifact(artifact: Artifact) {
+    if (!selected || downloadingArtifactId) {
+      return
+    }
+
+    setDownloadingArtifactId(artifact.artifactId)
+    setError(null)
+    try {
+      await downloadArtifact(selected.id, artifact.artifactId, artifact.fileName)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to download the artifact.')
+    } finally {
+      setDownloadingArtifactId(null)
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -321,14 +338,15 @@ function App() {
             <strong>Artifacts</strong>
             <div>
               {artifacts.map((artifact) => (
-                <a
+                <button
                   key={`${artifact.artifactId}/${artifact.fileName}`}
-                  href={`/api/sessions/${encodeURIComponent(selected.id)}/artifacts/${encodeURIComponent(artifact.artifactId)}/${encodeURIComponent(artifact.fileName)}`}
-                  download={artifact.fileName}
+                  type="button"
+                  onClick={() => saveArtifact(artifact)}
+                  disabled={downloadingArtifactId !== null}
                 >
                   {artifact.fileName}
                   <small>{Math.ceil(artifact.sizeBytes / 1024)} KB</small>
-                </a>
+                </button>
               ))}
             </div>
           </section>

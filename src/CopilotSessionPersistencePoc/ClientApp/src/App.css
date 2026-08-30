@@ -376,14 +376,15 @@ button:disabled {
   overflow-x: auto;
 }
 
-.artifacts a {
+.artifacts button {
   display: flex;
   flex: 0 0 auto;
   gap: 8px;
   padding: 5px 8px;
   color: #bae6fd;
-  text-decoration: none;
+  font: inherit;
   background: #192536;
+  border: 0;
   border-radius: 6px;
 }
 
