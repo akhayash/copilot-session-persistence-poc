@@ -84,6 +84,7 @@ docs/
   sqlite-mode.md       Local SQLite mode
   azure-storage-mode.md Azure Storage mode
   validation.md        検証条件と結果
+  backlog.md           積み残し課題と対応方針
 
 infra/container-apps/  Azure Container Apps Bicep と運用手順
 ```
@@ -289,6 +290,7 @@ Application registration と deployment parameter の設定は
 - [Local SQLite mode](docs/sqlite-mode.md)
 - [Azure Storage mode](docs/azure-storage-mode.md)
 - [Validation](docs/validation.md)
+- [Backlog](docs/backlog.md)
 - [Azure Container Apps deployment](infra/container-apps/README.md)
 
 ## References
