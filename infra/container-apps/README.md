@@ -68,29 +68,40 @@ Application側の制約は次のとおりです。詳細は
 ## PowerPoint custom container session pool
 
 PowerPoint生成用に、`CustomContainer` typeのsession poolをPython poolとは別に作成します。
-Worker imageにはPython、`python-pptx`、LibreOffice Impress、Noto CJK font、PyMuPDF、
-FastAPIを組み込みます。Runtimeでpackage installは行いません。
+Worker imageにはPython、`python-pptx`、Node.js、PptxGenJS、LibreOffice Impress、Poppler、
+Noto CJK font、PyMuPDF、FastAPIを組み込みます。Runtimeでpackage installは行いません。
 
 | 項目 | 設定 |
 | --- | --- |
 | Container type | `CustomContainer` |
-| Worker API | `POST /presentations`、`GET /artifacts/{fileName}` |
-| Output | PPTX、PDF、slide PNG、validation JSON |
+| Worker API | `POST /exec`、`GET`/`PUT /files`、`POST /render`。旧`POST /presentations`も互換維持 |
+| Output | workspace file、render済みslide PNG、publish済みPPTX |
 | Network | `EgressDisabled` |
 | Identity | ACR pullだけに使用し、session内では`lifecycle: None` |
 | Ready instance数 | `presentationReadySessionInstances`。Custom poolの制約により1以上 |
-| Copilot surface | `custom:create_presentation`。個別command toolは非公開 |
+| 最大同時session数 | `presentationMaxConcurrentSessions`。既定1でburst compute costを制限 |
+| Copilot surface | `custom:pptx_run`、`custom:pptx_files`、`custom:pptx_preview`、`custom:pptx_publish` |
 
 Copilot CLI sidecar imageには`/opt/copilot-skills/presentation/SKILL.md`を含め、
 Webは`Copilot__SkillDirectories__0=/opt/copilot-skills`をsession create／resumeの
 両方へ設定します。`enablePresentationSessions=false`ではpool、RBAC、Web側toolを
 無効化でき、`presentationWorkerImage`も不要です。
 
+`PresentationSessions__IdentifierKey`はBicepがdeployment scopeから決定的に生成し、
+application session IDとdeck IDから安定したHMAC identifierを導出します。Sandboxは
+cacheとして扱い、workspace実体は内部Artifact Blob、manifestはSessionFSへ保存します。
+
 Custom container session poolはplatform制約により`readySessionInstances`を1以上にする
 必要があります。このrepositoryのdeployment parameterは機能実証のため
 `enablePresentationSessions=true`、`presentationReadySessionInstances=1`であり、
 1 vCPU／2 GiBのworker 1台分のidle compute costが継続します。不要な環境では明示的に
 featureを無効化してください。
+
+各allocated sessionは`Timed` lifecycleで、requestが途絶えてから
+`sessionPoolCooldownPeriodInSeconds`（既定300秒）後に自動削除されます。これは作業sessionの
+auto-shutdownであり、ready worker 1台は置き換えられて維持されます。Web appは
+`minReplicas=0`、Python poolは`readySessionInstances=0`、presentation poolは最大同時session
+数1、Webのinactive revision保持数1を既定とし、機能を保った状態での費用を抑えます。
 
 Microsoft Entra IDでWeb application用のapplication registrationを1つ作成します。
 Azure resourceと別tenantのregistrationも使用できます。

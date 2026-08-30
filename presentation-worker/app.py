@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import base64
+import io
 import json
 import os
 import re
+import signal
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import zipfile
@@ -14,6 +18,7 @@ from pathlib import Path
 import fitz
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
+from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pptx import Presentation
 from pptx.dml.color import RGBColor
@@ -23,6 +28,10 @@ from pptx.util import Inches, Pt
 
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
+MAX_EXEC_OUTPUT_BYTES = 64 * 1024
+MAX_RENDER_IMAGES = 12
+MAX_RENDER_BYTES = 8 * 1024 * 1024
+MAX_PREVIEW_EDGE = 1024
 SAFE_FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}\.pptx$", re.IGNORECASE)
 SLIDE_XML = re.compile(r"^ppt/slides/slide\d+\.xml$")
 CONTENT_TYPES = {
@@ -41,7 +50,11 @@ PALE_TEAL = RGBColor(221, 239, 237)
 WHITE = RGBColor(255, 255, 255)
 FONT = "Noto Sans CJK JP"
 
-OUTPUT_DIR = Path(tempfile.mkdtemp(prefix="presentation-worker-")).resolve()
+WORKSPACE_DIR = Path(
+    os.environ.get("PRESENTATION_WORKSPACE", tempfile.mkdtemp(prefix="presentation-worker-"))
+).resolve()
+# Kept as an alias so older tests and callers can override the legacy artifact directory.
+OUTPUT_DIR = WORKSPACE_DIR
 BUILD_LOCK = threading.Lock()
 
 
@@ -84,6 +97,33 @@ class PresentationRequest(BaseModel):
         return value
 
 
+class ExecRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command: str = Field(min_length=1, max_length=16_384)
+    timeoutSeconds: int = Field(default=60, ge=1, le=90)
+
+    @field_validator("command")
+    @classmethod
+    def reject_blank_command(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
+class FileWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data: str = Field(max_length=48 * 1024 * 1024)
+    encoding: str = Field(default="base64", pattern="^(base64|utf-8)$")
+
+
+class RenderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=6, max_length=240)
+
+
 app = FastAPI(title="Presentation Worker", docs_url=None, redoc_url=None)
 
 
@@ -94,7 +134,12 @@ async def bound_request(request: Request, call_next):
         return JSONResponse(status_code=411, content={"detail": "Content-Length is required"})
     if length is not None:
         try:
-            if int(length) > MAX_REQUEST_BYTES:
+            maximum = (
+                MAX_ARTIFACT_BYTES * 2
+                if request.method == "PUT" and request.url.path.startswith("/files/")
+                else MAX_REQUEST_BYTES
+            )
+            if int(length) > maximum:
                 return JSONResponse(status_code=413, content={"detail": "Request body is too large"})
         except ValueError:
             return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
@@ -104,6 +149,41 @@ async def bound_request(request: Request, call_next):
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def workspace_root() -> Path:
+    return OUTPUT_DIR.resolve()
+
+
+def workspace_path(relative_path: str, *, must_exist: bool = False) -> Path:
+    if not relative_path or "\x00" in relative_path:
+        raise HTTPException(status_code=404, detail="File not found")
+    normalized = relative_path.replace("\\", "/")
+    if normalized.startswith("/") or any(part in {"", ".", ".."} for part in normalized.split("/")):
+        raise HTTPException(status_code=404, detail="File not found")
+    root = workspace_root()
+    path = (root / normalized).resolve()
+    if path == root or root not in path.parents:
+        raise HTTPException(status_code=404, detail="File not found")
+    if must_exist and not path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return path
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_entry(path: Path) -> dict[str, object]:
+    return {
+        "path": path.relative_to(workspace_root()).as_posix(),
+        "sizeBytes": path.stat().st_size,
+        "sha256": sha256_file(path),
+    }
 
 
 def add_text(
@@ -337,15 +417,11 @@ def render_presentation(pptx_path: Path, output_dir: Path, expected_pages: int) 
 
 
 def artifact_manifest(path: Path) -> dict[str, object]:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
     return {
         "fileName": path.name,
         "contentType": CONTENT_TYPES[path.suffix.lower()],
         "sizeBytes": path.stat().st_size,
-        "sha256": digest.hexdigest(),
+        "sha256": sha256_file(path),
     }
 
 
@@ -357,10 +433,211 @@ def clear_outputs() -> None:
             child.unlink()
 
 
+@app.post("/exec")
+def execute(data: ExecRequest) -> dict[str, object]:
+    root = workspace_root()
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        with BUILD_LOCK:
+            shell = (
+                [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", data.command]
+                if os.name == "nt"
+                else ["/bin/sh", "-lc", data.command]
+            )
+            process = subprocess.Popen(
+                shell,
+                cwd=root,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=os.name != "nt",
+            )
+            stdout_buffer = bytearray()
+            stderr_buffer = bytearray()
+            stdout_total = [0]
+            stderr_total = [0]
+            stdout_thread = threading.Thread(
+                target=collect_output,
+                args=(process.stdout, stdout_buffer, stdout_total),
+                daemon=True,
+            )
+            stderr_thread = threading.Thread(
+                target=collect_output,
+                args=(process.stderr, stderr_buffer, stderr_total),
+                daemon=True,
+            )
+            stdout_thread.start()
+            stderr_thread.start()
+            try:
+                exit_code = process.wait(timeout=data.timeoutSeconds)
+            except subprocess.TimeoutExpired as exc:
+                if os.name == "nt":
+                    process.kill()
+                else:
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+                stdout_thread.join()
+                stderr_thread.join()
+                raise HTTPException(status_code=408, detail="Command timed out") from exc
+            if os.name != "nt":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            stdout_thread.join(timeout=2)
+            stderr_thread.join(timeout=2)
+            if stdout_thread.is_alive() and process.stdout is not None:
+                process.stdout.close()
+            if stderr_thread.is_alive() and process.stderr is not None:
+                process.stderr.close()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Command execution failed: {exc}") from exc
+
+    stdout = bytes(stdout_buffer).decode("utf-8", errors="replace")
+    stderr = bytes(stderr_buffer).decode("utf-8", errors="replace")
+    return {
+        "exitCode": exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "stdoutTruncated": stdout_total[0] > MAX_EXEC_OUTPUT_BYTES,
+        "stderrTruncated": stderr_total[0] > MAX_EXEC_OUTPUT_BYTES,
+    }
+
+
+def collect_output(stream, buffer: bytearray, total: list[int]) -> None:
+    if stream is None:
+        return
+    with stream:
+        for chunk in iter(lambda: stream.read(8192), b""):
+            total[0] += len(chunk)
+            buffer.extend(chunk)
+            if len(buffer) > MAX_EXEC_OUTPUT_BYTES:
+                del buffer[:-MAX_EXEC_OUTPUT_BYTES]
+
+
+@app.get("/files")
+def list_files() -> dict[str, object]:
+    root = workspace_root()
+    root.mkdir(parents=True, exist_ok=True)
+    files = [
+        file_entry(path)
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    ]
+    return {"files": files}
+
+
+@app.get("/files/{relative_path:path}")
+def read_file(relative_path: str):
+    path = workspace_path(relative_path, must_exist=True)
+    if path.stat().st_size > MAX_ARTIFACT_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds the download size limit")
+    return FileResponse(path, media_type="application/octet-stream", filename=path.name)
+
+
+@app.put("/files/{relative_path:path}")
+def write_file(relative_path: str, data: FileWriteRequest) -> dict[str, object]:
+    path = workspace_path(relative_path)
+    try:
+        content = (
+            base64.b64decode(data.data, validate=True)
+            if data.encoding == "base64"
+            else data.data.encode("utf-8")
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid base64 file content") from exc
+    if len(content) > MAX_ARTIFACT_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds the upload size limit")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent,
+            prefix=".upload-",
+            delete=False,
+        ) as temporary:
+            temporary.write(content)
+            temporary_path = Path(temporary.name)
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return file_entry(path)
+
+
+@app.delete("/files/{relative_path:path}", status_code=204)
+def delete_file(relative_path: str):
+    path = workspace_path(relative_path, must_exist=True)
+    path.unlink()
+    parent = path.parent
+    root = workspace_root()
+    while parent != root and not any(parent.iterdir()):
+        parent.rmdir()
+        parent = parent.parent
+
+
+def preview_image(path: Path) -> tuple[str, int]:
+    with Image.open(path) as image:
+        image.thumbnail((MAX_PREVIEW_EDGE, MAX_PREVIEW_EDGE), Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        image.convert("RGB").save(output, format="PNG", optimize=True)
+    content = output.getvalue()
+    return base64.b64encode(content).decode("ascii"), len(content)
+
+
+@app.post("/render")
+def render(data: RenderRequest) -> dict[str, object]:
+    pptx_path = workspace_path(data.path, must_exist=True)
+    if pptx_path.suffix.lower() != ".pptx":
+        raise HTTPException(status_code=422, detail="Only .pptx files can be rendered")
+    try:
+        with zipfile.ZipFile(pptx_path) as archive:
+            expected_pages = sum(1 for name in archive.namelist() if SLIDE_XML.fullmatch(name))
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=422, detail="PPTX is not a valid Open XML zip") from exc
+    if expected_pages < 1 or expected_pages > MAX_RENDER_IMAGES:
+        raise HTTPException(status_code=422, detail="Presentation slide count is outside render limits")
+
+    render_dir = Path(tempfile.mkdtemp(prefix="presentation-render-")).resolve()
+    try:
+        with BUILD_LOCK:
+            validation = validate_pptx(pptx_path, expected_pages)
+            pdf_path, png_paths = render_presentation(pptx_path, render_dir, expected_pages)
+        images = []
+        total_bytes = 0
+        for index, png_path in enumerate(png_paths, start=1):
+            encoded, size_bytes = preview_image(png_path)
+            total_bytes += size_bytes
+            if total_bytes > MAX_RENDER_BYTES:
+                raise HTTPException(status_code=413, detail="Rendered previews exceed the response size limit")
+            images.append(
+                {
+                    "slideNumber": index,
+                    "mimeType": "image/png",
+                    "data": encoded,
+                    "sizeBytes": size_bytes,
+                }
+            )
+        result = {
+            "validation": validation,
+            "slideCount": expected_pages,
+            "pdf": artifact_manifest(pdf_path),
+            "images": images,
+        }
+        return result
+    except HTTPException:
+        raise
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        shutil.rmtree(render_dir, ignore_errors=True)
+
+
 @app.post("/presentations")
 def presentations(data: PresentationRequest) -> dict[str, object]:
     expected_slides = len(data.slides) + 1
     with BUILD_LOCK:
+        workspace_root().mkdir(parents=True, exist_ok=True)
         clear_outputs()
         pptx_path = OUTPUT_DIR / data.fileName
         try:

@@ -68,6 +68,11 @@ param enablePresentationSessions bool = false
 @maxValue(300)
 param presentationReadySessionInstances int = 1
 
+@description('Maximum concurrent custom presentation sessions. One caps burst compute cost.')
+@minValue(1)
+@maxValue(300)
+param presentationMaxConcurrentSessions int = 1
+
 @description('Cooldown period in seconds before an idle Python dynamic session container is reclaimed.')
 @minValue(300)
 @maxValue(3600)
@@ -485,7 +490,7 @@ resource presentationSessionPool 'Microsoft.App/sessionPools@2025-07-01' = if (e
         }
       ]
       scaleConfiguration: {
-        maxConcurrentSessions: sessionPoolMaxConcurrentSessions
+        maxConcurrentSessions: presentationMaxConcurrentSessions
         readySessionInstances: presentationReadySessionInstances
       }
       dynamicPoolConfiguration: {
@@ -526,6 +531,7 @@ resource webApp 'Microsoft.App/containerApps@2025-07-01' = if (deployWebApp) {
     environmentId: managedEnvironment.id
     configuration: {
       activeRevisionsMode: 'Single'
+      maxInactiveRevisions: 1
       ingress: {
         allowInsecure: false
         external: true
@@ -616,6 +622,10 @@ resource webApp 'Microsoft.App/containerApps@2025-07-01' = if (deployWebApp) {
             {
               name: 'PresentationSessions__RequestTimeoutSeconds'
               value: '240'
+            }
+            {
+              name: 'PresentationSessions__IdentifierKey'
+              value: uniqueString(subscription().id, resourceGroup().id, presentationSessionPoolName)
             }
             {
               name: 'Copilot__CliUrl'

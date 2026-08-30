@@ -195,7 +195,7 @@ file-list contract、download、PPTX生成、Artifact broker、Copilot tool invo
 ## 8. PowerPoint Skillとcustom container session
 
 2026-08-30に、PowerPoint専用のAzure Container Apps custom container session poolと
-review済みGitHub Copilot Skillをdeploymentし、次の順で検証しました。
+single-shot版GitHub Copilot Skillをdeploymentし、次の順で検証しました。
 
 1. Worker imageをAzure Container Registryでbuild
 2. `CustomContainer` session poolを`EgressDisabled`、image pull identity
@@ -220,6 +220,14 @@ size、aggregate size、SHA-256に加え、PPTXのZIP/Open XML members、PDF／P
 JSON parseを再検証します。全fileをdownload・検証してからpublishし、途中のBlob uploadが
 失敗した場合はjob単位でrollbackします。SandboxへStorage credential、SAS、managed
 identityは渡していません。
+
+2026-08-31にmulti-turn workspace版を実装し、workerの`exec`／`files`／`render` APIを
+18件のpytest、.NET client契約と`ToolBinaryResult(image/png)`構築をunit test、
+既存47件を含む53件の.NET test suiteで検証しました。Azure Container Appsへworker/Web/Skill
+imageをdeploymentし、pool management endpoint経由でfile write、Python実行、PPTX生成、
+Open XML検証、slide PNG返却、render一時fileの非表示、file削除をlive確認しました。
+実modelが画像を認識するWeb UI E2Eは、PlaywrightのMicrosoft Entra sign-inがaccount pickerへ
+戻るため未完了です。
 
 ## 9. Artifactのbrowser download
 
@@ -251,4 +259,3 @@ Object URLはdownload確定前に失効させません。
 
 なお検証中にbrowser automationが記録したGUID名のfileは、automation側がdownloadを
 横取りして一時保存した際の名前であり、application側の挙動ではありません。
-

@@ -274,6 +274,43 @@ public sealed class PresentationExecutionCoordinatorTests
             CancellationToken cancellationToken) =>
             Task.FromResult(files[fileName]);
 
+        public Task<PresentationExecResult> ExecuteAsync(
+            string identifier,
+            string command,
+            int timeoutSeconds,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<PresentationWorkspaceFile>> ListFilesAsync(
+            string identifier,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<PresentationWorkspaceFile> WriteFileAsync(
+            string identifier,
+            string path,
+            BinaryData content,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<BinaryData> ReadFileAsync(
+            string identifier,
+            string path,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task DeleteFileAsync(
+            string identifier,
+            string path,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<PresentationRenderResult> RenderAsync(
+            string identifier,
+            string path,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task StopSessionAsync(
             string identifier,
             CancellationToken cancellationToken)

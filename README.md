@@ -85,6 +85,8 @@ docs/
   azure-storage-mode.md Azure Storage mode
   validation.md        検証条件と結果
   backlog.md           積み残し課題と対応方針
+  decisions.md         Architecture decision log
+  diagrams/            編集可能な Excalidraw 図
 
 infra/container-apps/  Azure Container Apps Bicep と運用手順
 ```
@@ -291,6 +293,8 @@ Application registration と deployment parameter の設定は
 - [Azure Storage mode](docs/azure-storage-mode.md)
 - [Validation](docs/validation.md)
 - [Backlog](docs/backlog.md)
+- [Decision log](docs/decisions.md)
+- [Sandbox architecture diagram](docs/diagrams/sandbox-architecture.excalidraw)
 - [Azure Container Apps deployment](infra/container-apps/README.md)
 
 ## References

@@ -126,6 +126,8 @@ if (useAzureStorage)
             AzurePresentationSessionsClient>();
         builder.Services.AddScoped<PresentationExecutionCoordinator>();
         builder.Services.AddScoped<ICopilotToolProvider, PresentationToolProvider>();
+        builder.Services.AddScoped<PresentationWorkspaceCoordinator>();
+        builder.Services.AddScoped<ICopilotToolProvider, PresentationWorkspaceToolProvider>();
     }
 }
 else

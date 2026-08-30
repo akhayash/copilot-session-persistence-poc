@@ -21,4 +21,6 @@ public sealed class PresentationSessionsOptions
 
     [Range(1, 134_217_728)]
     public int MaximumOutputBytes { get; init; } = 30 * 1024 * 1024;
+
+    public string? IdentifierKey { get; init; }
 }

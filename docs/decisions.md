@@ -22,14 +22,15 @@ flowchart LR
     U["User<br/>browser"] --> W["Web app<br/>Container App"]
     W --> C["Copilot CLI<br/>同一 App 内"]
     W -.SessionFS.-> B[("Blob<br/>state.json")]
-    C --> P["Presentation pool<br/>LibreOffice あり<br/>shell なし"]
+    C --> P["Presentation pool<br/>Custom container<br/>shell / Python / Node / LibreOffice"]
     C --> Y["Python pool<br/>shell あり<br/>LibreOffice なし"]
     P --> A[("Artifact<br/>Blob")]
     A --> U
 ```
 
 ここで押さえる点は 2 つです。**SessionFS が会話の状態を持つ**こと、そして
-**sandbox が 2 種類あって能力が分かれている**ことです。この 2 つ目が後の判断すべてに効いてきます。
+**PowerPoint workflow は custom container だけで完結する**ことです。Python pool は既存の
+汎用 `execute_python` 用に残しますが、新しい presentation Skill からは使用しません。
 
 ---
 
@@ -61,18 +62,22 @@ flowchart LR
 
 ---
 
-## D-03 PowerPoint 生成は single-shot の固定 API
+## D-03 PowerPoint 生成は workspace API を使う
 
-**State**: Adopted（見直し対象）
+**State**: Adopted
 
-**決定**  `create_presentation` を 1 回呼んで完成品を返します。worker は固定の palette と
-layout で組み立て、request ごとに出力を破棄します。
+**決定**  新しい PowerPoint 生成は `pptx_run` / `pptx_files` / `pptx_preview` /
+`pptx_publish` を使います。`create_presentation` と `POST /presentations` は既存利用との
+互換性のため legacy fallback として残します。
 
-**理由**  model へ command や filesystem path を公開せず、決定論的で検証可能な成果物を得ることを
-優先しました。
+**理由**  固定 API では、render 結果を見た修正や既存 deck の再編集ができませんでした。
+workspace API では custom container 内で shell / Python / Node.js を実行し、同じ deck ID を
+turn 間で再利用できます。worker image は以前から `CustomContainer` であり、今回変えたのは
+image の種別ではなく API と状態管理です。
 
-**代償**  **render した slide を見て直す QA loop と、既存 deck の再編集ができません。**
-詳細と対応方針は [Backlog の課題 1](backlog.md) にあります。
+**代償**  model 生成 code の実行面が広がります。`EgressDisabled`、非 root、resource 上限、
+application 仲介の file 転送を維持し、sandbox へ Azure identity や storage credential を
+渡しません。
 
 ---
 
@@ -131,7 +136,8 @@ Web app と Python pool は 0 になりますが、**環境全体が 0 node に�
 `enablePresentationSessions=false` のときだけ**です。
 
 **代償**  1 vCPU / 2 GiB のワーカー 1 台分が常時課金されます。常用しない環境では feature ごと
-無効化する運用が妥当です。
+無効化する運用が妥当です。作業session自体は`Timed` lifecycleによりidle 300秒で自動削除し、
+最大同時session数は1に制限します。
 
 ---
 
@@ -186,13 +192,15 @@ session、コピーが高くつく作業セット、GPU や特殊な kernel 要�
 
 ## D-08 multi-turn の Skill 実行では sandbox を 1 つに統合する
 
-**State**: Proposed（未実装）
+**State**: Adopted
 
-**決定案**  shell、Python、LibreOffice、rendering を 1 つの image にまとめ、`exec` と file 転送の
+**決定**  shell、Python、Node.js、LibreOffice、rendering を 1 つの image にまとめ、`exec` と file 転送の
 API を持つ custom container へ統合します。
 
-**理由**  現在は build できる場所と render できる場所が別 pool にあり、**同じ filesystem を共有
-できないため QA loop が閉じません。**
+**理由**  以前は build できる場所と render できる場所が別 pool にあり、**同じ filesystem を共有
+できないため QA loop が閉じませんでした。** GitHub.Copilot.SDK 1.0.11 の
+`ToolResultObject.BinaryResultsForLlm` と `ToolBinaryResultType.Image` により、render した
+PNG を model context へ返せることも確認できました。
 
 中核となる原則は **「sandbox は cache であり、source of truth ではない」** です。sandbox は
 cooldown で必ず回収されるので、durability を期待しません。
@@ -220,7 +228,7 @@ sequenceDiagram
     W-->>M: Artifact 確定
 ```
 
-**代償**  code interpreter 型の managed hardening を手放し、自前 container の分離に依存します。
+**代償**  presentation workflow では code interpreter 型の managed hardening を使わず、自前 container の分離に依存します。
 `EgressDisabled`、非 root 実行、resource 上限、sandbox へ identity を渡さない設定で補います。
 
 詳細な設計方針は [Backlog の Appendix](backlog.md) を参照してください。

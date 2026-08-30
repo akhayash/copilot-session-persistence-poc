@@ -38,6 +38,10 @@ public sealed class AzureBlobArtifactStore(
             }
 
             string artifactId = Uri.UnescapeDataString(parts[0]);
+            if (artifactId.StartsWith(".workspace-", StringComparison.Ordinal))
+            {
+                continue;
+            }
             string fileName = Uri.UnescapeDataString(parts[1]);
             string sha256 = blob.Metadata.TryGetValue("sha256", out string? storedHash)
                 ? storedHash

@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using Azure.Core;
 using CopilotSessionPersistencePoc.Execution;
+using GitHub.Copilot;
 using Microsoft.Extensions.Options;
 
 namespace CopilotSessionPersistencePoc.Tests;
@@ -120,6 +121,146 @@ public sealed class PresentationSessionsClientTests
 
         Assert.Contains("HTTP 502", exception.Message, StringComparison.Ordinal);
         Assert.Contains("render failed", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WorkspaceCallsRoundTripWorkerContracts()
+    {
+        var handler = new DelegateHandler(request =>
+        {
+            string path = request.RequestUri!.AbsolutePath;
+            if (request.Method == HttpMethod.Post
+                && path.EndsWith("/exec", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse(
+                    """
+                    {
+                      "exitCode": 0,
+                      "stdout": "ok",
+                      "stderr": "",
+                      "stdoutTruncated": false,
+                      "stderrTruncated": false
+                    }
+                    """));
+            }
+
+            if (request.Method == HttpMethod.Get
+                && path.EndsWith("/files", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse(
+                    """
+                    {"files":[{"path":"deck.pptx","sizeBytes":4,"sha256":"abcd"}]}
+                    """));
+            }
+
+            if (request.Method == HttpMethod.Put)
+            {
+                Assert.EndsWith("/files/scripts/build.py", path, StringComparison.Ordinal);
+                return Task.FromResult(JsonResponse(
+                    """
+                    {"path":"scripts/build.py","sizeBytes":4,"sha256":"abcd"}
+                    """));
+            }
+
+            if (request.Method == HttpMethod.Get && path.Contains("/files/"))
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent("data"u8.ToArray()),
+                });
+            }
+
+            if (request.Method == HttpMethod.Delete)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NoContent));
+            }
+
+            if (request.Method == HttpMethod.Post
+                && path.EndsWith("/render", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse(
+                    """
+                    {
+                      "validation":{"passed":true},
+                      "slideCount":1,
+                      "images":[{
+                        "slideNumber":1,
+                        "mimeType":"image/png",
+                        "data":"aW1hZ2U=",
+                        "sizeBytes":5
+                      }]
+                    }
+                    """));
+            }
+
+            throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
+        });
+        AzurePresentationSessionsClient client = CreateClient(handler);
+
+        PresentationExecResult execution =
+            await client.ExecuteAsync("stable-id", "python build.py", 60, default);
+        IReadOnlyList<PresentationWorkspaceFile> files =
+            await client.ListFilesAsync("stable-id", default);
+        PresentationWorkspaceFile written = await client.WriteFileAsync(
+            "stable-id",
+            "scripts/build.py",
+            BinaryData.FromString("data"),
+            default);
+        BinaryData content = await client.ReadFileAsync(
+            "stable-id",
+            "deck.pptx",
+            default);
+        await client.DeleteFileAsync("stable-id", "obsolete.pptx", default);
+        PresentationRenderResult render = await client.RenderAsync(
+            "stable-id",
+            "deck.pptx",
+            default);
+
+        Assert.Equal("ok", execution.StandardOutput);
+        Assert.Equal("deck.pptx", Assert.Single(files).Path);
+        Assert.Equal("scripts/build.py", written.Path);
+        Assert.Equal("data", content.ToString());
+        Assert.True(render.ValidationPassed);
+        Assert.Equal("image", Assert.Single(render.Images).Content.ToString());
+    }
+
+    [Theory]
+    [InlineData("../secret")]
+    [InlineData("a/../secret")]
+    [InlineData("/absolute")]
+    [InlineData(@"a\secret")]
+    public async Task WorkspaceCallsRejectUnsafePaths(string path)
+    {
+        AzurePresentationSessionsClient client = CreateClient(
+            new DelegateHandler(_ => throw new InvalidOperationException("must not send")));
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.ReadFileAsync("stable-id", path, default));
+    }
+
+    [Fact]
+    public void BinaryToolResultCarriesRenderedSlide()
+    {
+        var result = new ToolResultAIContent(new ToolResultObject
+        {
+            ResultType = "success",
+            TextResultForLlm = "Inspect the slide.",
+            BinaryResultsForLlm =
+            [
+                new ToolBinaryResult
+                {
+                    Type = ToolBinaryResultType.Image,
+                    MimeType = "image/png",
+                    Data = Convert.ToBase64String("image"u8),
+                    Description = "Rendered slide 1",
+                },
+            ],
+        });
+
+        ToolBinaryResult image = Assert.Single(result.Result.BinaryResultsForLlm!);
+        Assert.Equal(ToolBinaryResultType.Image, image.Type);
+        Assert.Equal("image/png", image.MimeType);
+        Assert.Equal("image", Encoding.UTF8.GetString(Convert.FromBase64String(image.Data)));
     }
 
     private static AzurePresentationSessionsClient CreateClient(

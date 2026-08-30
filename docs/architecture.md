@@ -181,41 +181,41 @@ review済みの`presentation` Skillをheadless GitHub Copilot CLIへ読み込み
 Skillはstoryline、content fidelity、slide数、completion contractを定義しますが、
 commandやcredentialは持ちません。
 
-Modelへ公開するのは`custom:create_presentation`というdomain-level toolです。
-`python`、`node`、`libreoffice`、shell commandを個別toolとして公開しません。
-Toolはtitle、audience、slide title／body／highlightを受け取り、server側で生成した
-random identifierを使ってPowerPoint専用custom container sessionを呼びます。
+Modelへ公開する主経路は`custom:pptx_run`、`custom:pptx_files`、
+`custom:pptx_preview`、`custom:pptx_publish`です。同じ`deckId`からserver側で
+HMAC-SHA-256 identifierを導出し、turnをまたいで同じwarm custom container sessionへ
+routeします。旧`custom:create_presentation`は互換用fallbackとして残します。
 
 ```text
 Natural-language request
   -> presentation Skill
-  -> custom:create_presentation (structured content only)
-  -> custom container session HTTP API
-       -> python-pptx
+  -> custom:pptx_files / custom:pptx_run
+       -> Python or Node.js / PptxGenJS
+  -> custom:pptx_preview
+       -> Open XML validation
        -> LibreOffice PDF render
        -> PyMuPDF slide PNG render
-       -> Open XML / slide-count validation
-  -> Web verifies file size and SHA-256
-  -> owner-scoped Artifact Blob
+       -> ToolBinaryResult(image/png) -> model visual QA
+  -> correction loop
+  -> custom:pptx_publish
+       -> owner-scoped Artifact Blob
 ```
 
 Custom container sessionは`PythonLTS`の`/executions`／`/files` APIを使いません。
-Image内のHTTP serverが`POST /presentations`と`GET /artifacts/{fileName}`を提供し、
+Image内のHTTP serverが`POST /exec`、`GET`/`PUT /files`、`POST /render`を提供し、
 Container Appsのpool management endpointが同じidentifierのsessionへrequestをroute
 します。Image pull用managed identityのlifecycleは`None`とし、sandbox内へAzure
 identityやStorage credentialを公開しません。Runtime dependencyはimageへversion固定で
 組み込み、poolのnetworkは`EgressDisabled`にします。
 
-この経路は1回のtool callで完結するsingle-shot生成です。Workerは固定されたcolor palette、
-font、layoutでslideを組み立て、requestごとに出力directoryを空にします。Slide PNGはrender
-しますがmodelのcontextへは戻さず、validationはslide数、file size、SHA-256、PDF page数と
-いった機械的な整合性チェックに限定します。Toolの入力schemaは`title`／`body`／`highlight`
-のみで、image、chart、palette、layoutの指定を受け付けません。
+Sandboxはcacheでありsource of truthではありません。変更操作後、workspace fileの実体を
+owner-scoped Artifact Blobへcontent-addressedで保存し、SessionFSにはpath、SHA-256、size、
+内部Blob参照だけをcommitします。Sessionがcooldownで回収された場合は、このmanifestから
+新しいsandboxへmaterializeします。内部workspace Blobは通常のArtifact一覧には表示しません。
 
-この設計は、modelへcommandやfilesystem pathを公開せずdeterministicな成果物を得ることを
-優先した結果です。代償として、renderしたslideを見て要素の重なりやtext overflowを直す
-design QA loopや、既存deckへの追記・修正はできません。それらを扱うには、workerを session
-に紐づくworkspace serviceへ変更し、render画像をmodelのcontextへ戻す経路が必要です。
+`pptx_preview`は縮小したslide PNGをGitHub Copilot SDKの
+`ToolResultObject.BinaryResultsForLlm`へ載せます。Skillは初回preview後に少なくとも1回の
+修正と再previewを必須とし、検証済みdeckだけを`pptx_publish`で公開します。
 
 ### 5.8 Artifactのbrowser delivery
 
@@ -386,9 +386,9 @@ Azure Container Apps deployment にだけ構成します。
 - Python code実行（dynamic sessions）は1回の実行が最大220秒、poolのegressは無効、
   sandboxにStorage credentialを渡さない設計。Data-plane APIは`2025-10-02-preview`の
   preview。Azure上でPPTX生成とArtifact downloadまでlive validation済み
-- PowerPoint生成はsingle-shotで、design QA loopと既存deckの再編集に対応しない（5.7参照）。
-  Code実行環境（Python dynamic session）とrendering環境（custom container session）が別pool
-  に分かれており、同一sandbox内でbuildとrenderを反復できない
+- PowerPoint workspaceはfile数と合計sizeに上限があり、長時間jobや大規模deckは対象外
+- Python dynamic session poolは汎用`execute_python`との後方互換用に残している。
+  presentation Skillはcustom container poolだけを使う
 
 検証条件と結果は [Validation](validation.md) を参照してください。
 

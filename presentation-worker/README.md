@@ -12,14 +12,20 @@ docker build -t presentation-worker .\presentation-worker
 docker run --rm -p 8080:8080 presentation-worker
 ```
 
-image には pinned Python packages、LibreOffice Impress、Noto CJK fonts、renderer、
-および tests が含まれます。runtime network access は不要です。一時 artifact は
-process 固有の OS temp directory にのみ保存され、次の生成 request で削除されます。
-同一 session では一度に 1 request を処理します。
+image には pinned Python packages、Node.js、PptxGenJS、LibreOffice Impress、
+Poppler、Noto CJK fonts、renderer が含まれます。test dependencies と tests は
+production image に含めません。runtime network access は不要です。workspace は
+custom container session の lifetime 中は保持され、application が SessionFS との
+materialize / commit を担当します。同一 session では一度に 1 command または render を
+処理します。
 
 ## API
 
 - `GET /healthz` — `{"status":"ok"}`
+- `POST /exec` — workspace を cwd として shell / Python / Node.js command を実行。
+- `GET /files` — workspace file と size / SHA-256 を列挙。
+- `GET /files/{path}` / `PUT /files/{path}` — workspace file の取得 / 書き込み。
+- `POST /render` — workspace の `.pptx` を検証・renderし、縮小した slide PNG を返却。
 - `POST /presentations` — `fileName`（安全な `.pptx` basename）、`title`、
   optional `subtitle`、`audience`、1–7 個の `slides`
   (`title`, `body`, optional `highlight`)。title slide を含め合計 2–8 slides。
@@ -35,7 +41,6 @@ validation または rendering に失敗した request は artifact を返しま
 Tests:
 
 ```powershell
-docker run --rm presentation-worker pytest -q
-# dependencies が local にある場合:
-python -m pytest .\presentation-worker\tests -q
+python -m pip install -r .\presentation-worker\requirements-dev.txt
+python -m pytest .\presentation-worker\tests -q --basetemp=.\presentation-worker\.pytest-tmp
 ```

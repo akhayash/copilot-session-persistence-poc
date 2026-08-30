@@ -1,4 +1,5 @@
 import hashlib
+import base64
 import json
 import zipfile
 from pathlib import Path
@@ -105,3 +106,85 @@ def test_total_slide_bounds(client):
     no_content = request_payload()
     no_content["slides"] = []
     assert client.post("/presentations", json=no_content).status_code == 422
+
+
+def test_workspace_files_persist_across_requests(client):
+    content = "console.log('hello')\n"
+    response = client.put(
+        "/files/scripts/build.js",
+        json={"encoding": "utf-8", "data": content},
+    )
+    assert response.status_code == 200
+    assert response.json()["path"] == "scripts/build.js"
+
+    listing = client.get("/files").json()["files"]
+    assert [entry["path"] for entry in listing] == ["scripts/build.js"]
+    downloaded = client.get("/files/scripts/build.js")
+    assert downloaded.content == content.encode()
+    assert client.delete("/files/scripts/build.js").status_code == 204
+    assert client.get("/files").json()["files"] == []
+
+
+def test_upload_does_not_overwrite_similarly_named_workspace_file(client):
+    client.put("/files/.foo.tmp", json={"encoding": "utf-8", "data": "keep"})
+    client.put("/files/foo", json={"encoding": "utf-8", "data": "replace"})
+
+    assert client.get("/files/.foo.tmp").content == b"keep"
+    assert client.get("/files/foo").content == b"replace"
+
+
+@pytest.mark.parametrize("path", ["../secret", r"..\\secret", "/etc/passwd", "a/../secret"])
+def test_workspace_files_reject_path_escape(client, path):
+    assert client.get(f"/files/{path}").status_code == 404
+
+
+def test_exec_uses_workspace_and_reports_exit_code(client):
+    response = client.post(
+        "/exec",
+        json={"command": "echo workspace > result.txt && echo output"},
+    )
+    assert response.status_code == 200
+    assert response.json()["exitCode"] == 0
+    assert response.json()["stdout"].strip() == "output"
+    assert response.json()["stderr"] == ""
+    assert client.get("/files/result.txt").content.strip() == b"workspace"
+
+
+def test_exec_bounds_retained_output(client):
+    client.put(
+        "/files/spam.py",
+        json={
+            "encoding": "utf-8",
+            "data": (
+                "import sys\n"
+                f"sys.stdout.write('x' * {app.MAX_EXEC_OUTPUT_BYTES + 100})\n"
+            ),
+        },
+    )
+    response = client.post(
+        "/exec",
+        json={"command": "python spam.py"},
+    )
+    assert response.status_code == 200
+    assert response.json()["stdoutTruncated"] is True
+    assert len(response.json()["stdout"]) == app.MAX_EXEC_OUTPUT_BYTES
+
+
+def test_render_returns_downscaled_base64_previews(client, monkeypatch):
+    monkeypatch.setattr(app, "render_presentation", fake_render)
+    data = app.PresentationRequest.model_validate(request_payload(content_count=1))
+    pptx_path = app.workspace_root() / data.fileName
+    app.create_pptx(data, pptx_path)
+
+    def fake_preview(_path):
+        content = b"preview"
+        return base64.b64encode(content).decode("ascii"), len(content)
+
+    monkeypatch.setattr(app, "preview_image", fake_preview)
+    response = client.post("/render", json={"path": data.fileName})
+    assert response.status_code == 200
+    result = response.json()
+    assert result["slideCount"] == 2
+    assert len(result["images"]) == 2
+    assert base64.b64decode(result["images"][0]["data"]) == b"preview"
+    assert not (app.workspace_root() / ".render-briefing").exists()
