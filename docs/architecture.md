@@ -206,6 +206,17 @@ Container Appsのpool management endpointが同じidentifierのsessionへrequest
 identityやStorage credentialを公開しません。Runtime dependencyはimageへversion固定で
 組み込み、poolのnetworkは`EgressDisabled`にします。
 
+この経路は1回のtool callで完結するsingle-shot生成です。Workerは固定されたcolor palette、
+font、layoutでslideを組み立て、requestごとに出力directoryを空にします。Slide PNGはrender
+しますがmodelのcontextへは戻さず、validationはslide数、file size、SHA-256、PDF page数と
+いった機械的な整合性チェックに限定します。Toolの入力schemaは`title`／`body`／`highlight`
+のみで、image、chart、palette、layoutの指定を受け付けません。
+
+この設計は、modelへcommandやfilesystem pathを公開せずdeterministicな成果物を得ることを
+優先した結果です。代償として、renderしたslideを見て要素の重なりやtext overflowを直す
+design QA loopや、既存deckへの追記・修正はできません。それらを扱うには、workerを session
+に紐づくworkspace serviceへ変更し、render画像をmodelのcontextへ戻す経路が必要です。
+
 ### 5.8 Artifactのbrowser delivery
 
 Artifact APIはAzure Container Appsのbuilt-in authenticationの内側にあります。生成された
@@ -375,6 +386,9 @@ Azure Container Apps deployment にだけ構成します。
 - Python code実行（dynamic sessions）は1回の実行が最大220秒、poolのegressは無効、
   sandboxにStorage credentialを渡さない設計。Data-plane APIは`2025-10-02-preview`の
   preview。Azure上でPPTX生成とArtifact downloadまでlive validation済み
+- PowerPoint生成はsingle-shotで、design QA loopと既存deckの再編集に対応しない（5.7参照）。
+  Code実行環境（Python dynamic session）とrendering環境（custom container session）が別pool
+  に分かれており、同一sandbox内でbuildとrenderを反復できない
 
 検証条件と結果は [Validation](validation.md) を参照してください。
 
