@@ -140,13 +140,22 @@ Client secretには有効期限があります。期限前にapplication registr
 
 `minReplicas: 0`のConsumption workloadはrequestがないとscale to zeroになるため、
 Web containerとCLI sidecarのidle computeは発生しません。Manual Jobも実行中だけ
-computeを使用します。
+computeを使用します。Python dynamic session poolも`sessionPoolReadySessionInstances: 0`
+のためidle instanceを持ちません。
+
+ただし`enablePresentationSessions=true`の場合、custom container session poolは
+platform制約により`readySessionInstances`が1以上必要です。利用がなくても1 vCPU／2 GiBの
+worker 1台分のidle compute costが継続するため、この環境全体が完全な0 nodeになるのは
+`enablePresentationSessions=false`のときだけです。
+
+継続して発生する費用:
 
 - Blob/Table用Azure Private Endpoint 2個
 - Azure Private DNS zone 2個
 - Storage Accountの保存容量とtransaction
 - Azure Container Registryの固定料金とimage storage
 - request受信時のAzure Container Apps compute/request
+- `enablePresentationSessions=true`のときはready presentation worker 1台
 
 このtemplateではLog Analytics workspaceもAzure Monitor log destinationも構成せず、
 検証環境の固定費を抑えています。ただし、Storage policyによりPrivate Endpointが必要なため、

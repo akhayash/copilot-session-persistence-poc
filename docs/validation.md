@@ -220,3 +220,35 @@ size、aggregate size、SHA-256に加え、PPTXのZIP/Open XML members、PDF／P
 JSON parseを再検証します。全fileをdownload・検証してからpublishし、途中のBlob uploadが
 失敗した場合はjob単位でrollbackします。SandboxへStorage credential、SAS、managed
 identityは渡していません。
+
+## 9. Artifactのbrowser download
+
+2026-08-30に、生成済みArtifactをbrowserへ渡す経路をAzure上で検証しました。
+
+当初は、Artifactが拡張子のないGUID名でdownloadされPowerPointで開けない事象が報告され
+ました。切り分けの結果、原因は次の2点でした。
+
+1. 認証済みArtifact APIへ直接navigationしていたため、sign-in期限切れ時にsign-in pageへ
+   cross-originのredirectが返り、browserが`download`属性を無視していた
+2. `index.html`を`Cache-Control`なしで配信していたため、browserがSPA shellをheuristicに
+   cacheし、deployment後も古いclientを実行し続けていた
+
+対応として、clientでのArtifact取得をObject URL経由の明示file name保存へ変更し、redirect
+された応答をArtifactとして保存しないようにしました。あわせてSPA shellを
+`no-cache, must-revalidate`、content hash付き`/assets/*`を`immutable`で配信します。
+Object URLはdownload確定前に失効させません。
+
+### Result
+
+| 確認項目 | 結果 |
+| --- | --- |
+| SPA shellの`Cache-Control` | `must-revalidate, no-cache` |
+| `/assets/*`の`Cache-Control` | `public, max-age=31536000, immutable` |
+| PPTXのdownload file name | `web_system_validation_report.pptx` |
+| PPTXのpackage | 33,203 bytes、Open XML、slide 3枚 |
+| PDFのdownload | 137,271 bytes、`%PDF-`署名 |
+| slide PNG 3枚と`validation.json` | 正しいfile nameで取得 |
+
+なお検証中にbrowser automationが記録したGUID名のfileは、automation側がdownloadを
+横取りして一時保存した際の名前であり、application側の挙動ではありません。
+

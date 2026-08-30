@@ -206,6 +206,26 @@ Container Appsのpool management endpointが同じidentifierのsessionへrequest
 identityやStorage credentialを公開しません。Runtime dependencyはimageへversion固定で
 組み込み、poolのnetworkは`EgressDisabled`にします。
 
+### 5.8 Artifactのbrowser delivery
+
+Artifact APIはAzure Container Appsのbuilt-in authenticationの内側にあります。生成された
+PPTXやPDFをbrowserへ渡す経路は、認証を前提に次の制約を満たす必要があります。
+
+React側はArtifact APIへ直接navigationせず、sign-in cookie付きで`fetch`し、取得した
+bytesからObject URLを作って明示した`download` file nameで保存します。認証済みAPIへ直接
+navigationすると、sign-in期限切れ時にsign-in pageへcross-originのredirectが返ることが
+あり、その場合browserは`download`属性を無視して内部download識別子をfile nameに使います。
+結果として拡張子のないfileにsign-in HTMLが保存され、PowerPointで開けません。
+
+そのためclientは、redirectされた応答やsame-originでなくなった応答をArtifactとして保存
+せず、再sign-inを促すerrorを表示します。Object URLはbrowserがdownloadを確定するまで
+保持し、同一task内では失効させません。
+
+静的fileのcache policyも同じ経路の一部です。SPA shellの`index.html`は
+`no-cache, must-revalidate`、content hash付きの`/assets/*`は1年の`immutable`で配信します。
+`Cache-Control`を付けないとbrowserがshellをheuristicにcacheし、deployment後も古いclientを
+実行し続けるためです。
+
 ## 6. 1 回の message request
 
 ```mermaid
@@ -381,6 +401,9 @@ Azure Container Apps deployment にだけ構成します。
 | `DELETE` | `/api/sessions/{id}` | Session の削除 |
 | `GET` | `/api/sessions/{id}/diagnostics` | SessionFS の概要 |
 | `GET` | `/api/sessions/{id}/diagnostics/entry` | SessionFS node の preview |
+| `GET` | `/api/sessions/{id}/artifacts` | Artifact 一覧（Azure Storage mode のみ） |
+| `POST` | `/api/sessions/{id}/artifacts` | Artifact の upload（最大 10 MiB） |
+| `GET` | `/api/sessions/{id}/artifacts/{artifactId}/{fileName}` | Artifact の download |
 | `GET` | `/api/health` | Copilot CLI の TCP 到達性 |
 
 ## Appendix C. SessionFS contract
