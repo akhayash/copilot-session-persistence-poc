@@ -70,7 +70,7 @@ Dependabotがmedium severityのalertを1件報告しています。`pytest`のtm
 ものです。`pytest`はworker imageのtest実行にのみ使い、production pathでは読み込まれません
 が、現在は`requirements.txt`へ他のruntime依存と同列で固定されており、imageへ同梱されます。
 
-`pytest`を8.4.2へ更新し、`requirements-dev.txt`へ分離しました。production image は
+`pytest`を9.0.3へ更新し、`requirements-dev.txt`へ分離しました。production image は
 runtime用`requirements.txt`だけをinstallし、testsもcopyしません。
 
 ---
