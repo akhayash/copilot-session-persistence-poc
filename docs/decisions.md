@@ -79,7 +79,8 @@ image の種別ではなく API と状態管理です。
 **代償**  model 生成 code の実行面が広がります。`EgressDisabled`、非 root、resource 上限、
 application 仲介の file 転送を維持し、sandbox へ Azure identity や storage credential を
 渡しません。また、workspace Toolの選択は保証できても、視覚QAの修正品質はmodel依存です。
-publish前のfix-and-verifyを機械的に強制するgateは未実装です。
+そのため、初回preview後にPPTX hashが変化し、変更後のhashを再previewし、その後に未previewの
+変更がないことを`pptx_publish`で機械的に検証します。publish成功後はQA stateを削除します。
 
 ---
 

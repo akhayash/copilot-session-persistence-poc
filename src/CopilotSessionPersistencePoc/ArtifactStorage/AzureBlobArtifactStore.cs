@@ -38,7 +38,8 @@ public sealed class AzureBlobArtifactStore(
             }
 
             string artifactId = Uri.UnescapeDataString(parts[0]);
-            if (artifactId.StartsWith(".workspace-", StringComparison.Ordinal))
+            if (artifactId.StartsWith(".workspace-", StringComparison.Ordinal)
+                || artifactId.StartsWith(".qa-", StringComparison.Ordinal))
             {
                 continue;
             }

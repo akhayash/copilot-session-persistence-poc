@@ -34,22 +34,24 @@ Skill は custom presentation pool だけを使うため、PowerPoint workflow �
 
 ## 2. PowerPoint visual QA gate
 
-**State**: Open / **Impact**: 大 / **Scope**: `Execution`、`SessionFS`、`tests`
+**State**: Resolved / **Impact**: 大 / **Scope**: `Execution`、`SessionFS`、`tests`
 
 実modelによるWeb UI E2Eで、`pptx_run`と`pptx_preview`は呼ばれましたが、矢印labelが重なった
 slideがそのままpublishされました。Skillとsystem promptが要求する「preview後に最低1回修正し、
 再previewする」は、modelへの文章指示だけでは保証できません。
 
-`pptx_publish`側で、対象PPTXについて次の状態をSessionFSへ保持し、条件未達ならpublishを
-拒否するgateを実装します。
+`pptx_publish`側で、対象PPTXについて次の状態をSessionFSの
+modelから参照・変更できない内部Artifact `.qa-{deckId}/state.json` へ保持し、条件未達なら
+publishを拒否するgateを実装しました。
 
 1. 初回preview時のPPTX hash
 2. 初回preview後にPPTX hashが変化したこと
 3. 変更後のhashに対して再previewが成功したこと
 4. publish対象のhashが最終preview時と一致すること
 
-これは見た目の良さ自体を完全には判定しませんが、少なくともfix-and-verify loopをTool contract
-として強制できます。
+publish成功後はQA stateを削除し、次の改訂でも新しいfix-and-verify cycleを要求します。
+これは見た目の良さ自体を完全には判定しませんが、少なくともfix-and-verify loopをTool
+contractとして強制します。
 
 ---
 
@@ -57,9 +59,9 @@ slideがそのままpublishされました。Skillとsystem promptが要求す�
 
 **State**: Open / **Impact**: 中 / **Scope**: `infra`、deployment手順
 
-稼働中のweb imageは`sessionfs-web:multi-turn-pptx-v3`、presentation workerは
-`presentation-worker:multi-turn-v3`、Copilot CLI sidecarは
-`copilot-cli:multi-turn-pptx-v2`です。Bicep parameterはenvironment variableを参照するため、
+稼働中のweb imageは`sessionfs-web:multi-turn-pptx-v5`、presentation workerは
+`presentation-worker:multi-turn-v4`、Copilot CLI sidecarは
+`copilot-cli:multi-turn-pptx-v5`です。Bicep parameterはenvironment variableを参照するため、
 次回`az deployment group create`でも`SESSIONFS_WEB_IMAGE`、
 `PRESENTATION_WORKER_IMAGE`、`COPILOT_CLI_IMAGE`へこの組み合わせを指定する必要があります。
 
@@ -68,7 +70,27 @@ slideがそのままpublishされました。Skillとsystem promptが要求す�
 
 ---
 
-## 4. Presentation poolのidle cost
+## 4. PowerPoint geometryの自動検査
+
+**State**: Open / **Impact**: 大 / **Scope**: `presentation-worker`、`Execution`
+
+fix-and-verify gateを通過したdeckでも、connectorがnodeやlabelを横切る問題が残りました。
+画像をmodelへ返すだけでは、modelが見落とす、または修正が不十分な場合があります。
+
+次の段階では、workerでslide geometryを解析し、少なくとも次をmachine-readableなwarningまたは
+validation failureとして`pptx_preview`へ返す必要があります。
+
+- connector segmentと、始点・終点以外のnode rectangleとの交差
+- connectorと独立したtext box（edge label）との交差
+- node rectangle同士の意図しない重なり
+- slide外へ出たshape、0.3 inch未満の過密なgap
+
+誤検知を避けるため、まずwarningとしてmodelへ返し、実deck corpusで閾値を調整してから
+publish gateへ組み込みます。
+
+---
+
+## 5. Presentation poolのidle cost
 
 **State**: Accepted / **Impact**: 中 / **Scope**: `infra`
 
@@ -84,7 +106,7 @@ Web appは`minReplicas: 0`、Python poolは`readySessionInstances: 0`でscale-to
 
 ---
 
-## 5. pytestのsecurity alert
+## 6. pytestのsecurity alert
 
 **State**: Resolved / **Impact**: 小 / **Scope**: `presentation-worker/requirements*.txt`
 
@@ -97,7 +119,7 @@ runtime用`requirements.txt`だけをinstallし、testsもcopyしません。
 
 ---
 
-## 6. Artifactのサイズ上限と保持方針
+## 7. Artifactのサイズ上限と保持方針
 
 **State**: Open / **Impact**: 小（課題1に着手する場合は中） / **Scope**: `Api`、`ArtifactStorage`
 
@@ -108,7 +130,7 @@ Artifact uploadは`SessionEndpoints`の`MaxArtifactUploadBytes`で10 MiB、worke
 
 ---
 
-## 7. 既存の制約
+## 8. 既存の制約
 
 以下はPoCのscope外として意図的に扱っていない項目です。詳細は
 [Architecture](architecture.md) の「11. 現在の制約」を参照してください。

@@ -69,6 +69,25 @@ def test_validation_rejects_wrong_expected_slide_count(tmp_path):
         app.validate_pptx(path, 3)
 
 
+def test_validation_rejects_decimal_open_xml_coordinates(tmp_path):
+    data = app.PresentationRequest.model_validate(request_payload(content_count=1))
+    path = tmp_path / data.fileName
+    app.create_pptx(data, path)
+    rewritten = tmp_path / "rewritten.pptx"
+    with zipfile.ZipFile(path) as source, zipfile.ZipFile(
+        rewritten, "w", zipfile.ZIP_DEFLATED
+    ) as destination:
+        for entry in source.infolist():
+            content = source.read(entry.filename)
+            if entry.filename == "ppt/slides/slide1.xml":
+                content = content.replace(b'cy="6858000"', b'cy="6858000.0"', 1)
+            destination.writestr(entry, content)
+    rewritten.replace(path)
+
+    with pytest.raises(ValueError, match="geometry coordinates must be integers"):
+        app.validate_pptx(path, 2)
+
+
 def test_manifest_hashes_and_artifact_download(client, monkeypatch):
     monkeypatch.setattr(app, "render_presentation", fake_render)
     response = client.post("/presentations", json=request_payload(content_count=2))

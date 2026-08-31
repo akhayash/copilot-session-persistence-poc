@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using CopilotSessionPersistencePoc.ArtifactStorage;
 using CopilotSessionPersistencePoc.Copilot;
 using GitHub.Copilot;
 using Microsoft.Extensions.AI;
@@ -106,7 +107,9 @@ public sealed class PresentationWorkspaceToolProvider(
                 {
                     ResultType = "success",
                     TextResultForLlm =
-                        $"Validated {result.SlideCount} slides. Inspect every returned image.",
+                        $"Validated {result.SlideCount} slides. Inspect every returned image. "
+                        + "For the required correction cycle, regenerate this same path "
+                        + $"('{path}') in place, then preview this same path again.",
                     BinaryResultsForLlm =
                     [
                         .. result.Images.Select(static image => new ToolBinaryResult
@@ -137,12 +140,31 @@ public sealed class PresentationWorkspaceToolProvider(
                 CancellationToken cancellationToken) =>
             {
                 EnsureSession(invocation, sessionId);
-                return await coordinator.PublishAsync(
-                    sessionId,
-                    deckId,
-                    invocation.ToolCallId,
-                    path,
-                    cancellationToken);
+                try
+                {
+                    ArtifactInfo artifact =
+                        await coordinator.PublishAsync(
+                            sessionId,
+                            deckId,
+                            invocation.ToolCallId,
+                            path,
+                            cancellationToken);
+                    return new ToolResultAIContent(new ToolResultObject
+                    {
+                        ResultType = "success",
+                        TextResultForLlm =
+                            $"PUBLISHED: {JsonSerializer.Serialize(artifact, JsonOptions)}",
+                    });
+                }
+                catch (InvalidOperationException exception)
+                {
+                    return new ToolResultAIContent(new ToolResultObject
+                    {
+                        ResultType = "failure",
+                        TextResultForLlm =
+                            $"PUBLISH_REJECTED: {exception.Message}",
+                    });
+                }
             },
             ToolOptions,
             new AIFunctionFactoryOptions
@@ -150,7 +172,8 @@ public sealed class PresentationWorkspaceToolProvider(
                 Name = "pptx_publish",
                 Description =
                     "Validate and publish the final .pptx as a downloadable session artifact. "
-                    + "Call only after pptx_preview and any required corrections.",
+                    + "Publishing is rejected unless the deck was previewed, concretely "
+                    + "corrected, and successfully previewed again without later changes.",
             }),
     ];
 

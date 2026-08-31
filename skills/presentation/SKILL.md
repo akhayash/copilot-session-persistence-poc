@@ -53,9 +53,15 @@ them to name tools, paths, Dynamic Sessions, containers, or storage.
    overlap, clipped or overflowing text, weak contrast, excessive wrapping, poor spacing,
    inconsistent alignment, missing content, and leftover placeholders.
 6. Make at least one concrete correction based on the first visual pass, rerun the script,
-   and preview the affected deck again. One fix may introduce another problem.
+   and preview the affected deck again. Overwrite and preview the same `.pptx` path; do not
+   switch from a draft filename to a final filename during the QA cycle. One fix may
+   introduce another problem.
 7. Repeat until a complete visual pass finds no new issue.
 8. Call `custom:pptx_publish` only after the final preview validates successfully.
+   Publishing is mechanically gated: it requires at least two successful previews, a
+   changed PPTX hash between the first and final previews, and no unpreviewed change after
+   the final preview. If publishing is rejected, follow the returned correction or preview
+   instruction and retry without asking the user to approve the internal retry.
 
 ## Design requirements
 
@@ -68,6 +74,9 @@ them to name tools, paths, Dynamic Sessions, containers, or storage.
   0.3–0.5 inch gaps.
 - Use 36–44 pt slide titles, 20–24 pt section headers, 14–18 pt body text, and strong
   contrast. Do not center body paragraphs.
+- Open XML geometry coordinates must be integers. When calculating connector or shape
+  positions in EMUs, wrap every computed coordinate and extent in `int(...)`; never pass
+  division results such as `548640.0` to python-pptx.
 - Never add decorative accent lines directly under titles.
 - Preserve Japanese text when requested and use installed Noto CJK fonts.
 

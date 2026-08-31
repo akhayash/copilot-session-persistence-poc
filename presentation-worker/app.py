@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import fitz
@@ -34,6 +35,7 @@ MAX_RENDER_BYTES = 8 * 1024 * 1024
 MAX_PREVIEW_EDGE = 1024
 SAFE_FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}\.pptx$", re.IGNORECASE)
 SLIDE_XML = re.compile(r"^ppt/slides/slide\d+\.xml$")
+INTEGER_COORDINATE = re.compile(r"^-?\d+$")
 CONTENT_TYPES = {
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".pdf": "application/pdf",
@@ -361,6 +363,22 @@ def validate_pptx(path: Path, expected_slides: int) -> dict[str, object]:
                 raise ValueError(f"Expected {expected_slides} slides, found {len(slides)}")
             if any(not archive.read(name).strip() for name in slides):
                 raise ValueError("A slide XML member is empty")
+            for name in slides:
+                try:
+                    root = ET.fromstring(archive.read(name))
+                except ET.ParseError as exc:
+                    raise ValueError(f"Slide XML is malformed: {name}") from exc
+                for element in root.iter():
+                    local_name = element.tag.rsplit("}", 1)[-1]
+                    if local_name not in {"off", "ext", "chOff", "chExt"}:
+                        continue
+                    for attribute in ("x", "y", "cx", "cy"):
+                        value = element.attrib.get(attribute)
+                        if value is not None and not INTEGER_COORDINATE.fullmatch(value):
+                            raise ValueError(
+                                "Open XML geometry coordinates must be integers: "
+                                f"{name} {local_name}.{attribute}={value!r}"
+                            )
     except zipfile.BadZipFile as exc:
         raise ValueError("PPTX is not a valid Open XML zip") from exc
     return {"passed": True, "openXml": True, "nonemptySlideXml": True}

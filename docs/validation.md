@@ -242,8 +242,27 @@ workspace Tool必須へ修正しました。再deployment後の新規sessionで�
 | 図の品質 | 不合格。複数の矢印labelが重なったままpublishされた |
 
 これによりworkspace経路と画像返却の実model invocationは確認できましたが、prompt／Skillの
-指示だけではfix-and-verify loopを保証できないことも判明しました。publish前の再修正・
-再previewをTool側で強制する課題は [Backlog](backlog.md) に記録します。
+指示だけではfix-and-verify loopを保証できないことも判明しました。この結果を受け、
+`pptx_publish`にpreview回数、初回／最終hashの変化、publish時hashとの一致を検証するgateを
+追加しました。gateの拒否3ケースと正常なfix-and-verifyをunit testで固定しています。
+初回E2Eではmodelが初版と修正版を別pathへ保存したため、path単位のgateが修正版を初回preview
+として扱いpublishを拒否しました。SDKのTool例外表示は本文を隠すため、gate拒否は
+`PUBLISH_REJECTED`のmodel-visible resultとして返し、preview結果にも同じpathを上書きして
+再previewする指示を含めます。
+
+次のE2Eではgateを通過してArtifact publishまで成功しましたが、download後のPPTXをMicrosoft
+PowerPointで開くと破損扱いになりました。ZIP、python-pptx、LibreOfficeでは正常でした。
+slide XMLを調査すると、model生成codeがconnectorのEMUsへ浮動小数を渡し、
+`cy="548640.0"`のような整数型違反を出力していました。LibreOfficeは許容しますがPowerPointは
+拒否します。worker validationへslide geometryの整数検査を追加し、Skillにも計算した座標を
+必ず`int(...)`へ変換する規則を追加しました。
+
+修正後のworker／Skillで再度Web UI E2Eを行い、`azure_solution_v1.pptx`（30,291 bytes、
+slide 1枚）を生成・publish・downloadしました。slide XMLに小数geometryがないこと、ZIP
+integrity、Microsoft PowerPointでのopen、1600×900 PNG exportを確認しました。
+一方、visual inspectionではconnectorがnodeやlabelを横切る箇所が残りました。QA gateは
+「変更して再previewした」ことを保証しますが、変更が十分に良いことまでは判定しません。
+この制約は [Backlog](backlog.md) のgeometry検査課題として継続します。
 
 ## 9. Artifactのbrowser download
 

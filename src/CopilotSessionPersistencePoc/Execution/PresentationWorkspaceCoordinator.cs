@@ -14,6 +14,7 @@ public sealed class PresentationWorkspaceCoordinator(
     IOptions<PresentationSessionsOptions> options)
 {
     private const string PresentationRoot = "/presentation";
+    private const string QaStateFileName = "state.json";
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
     private readonly PresentationSessionsOptions settings = options.Value;
@@ -83,7 +84,39 @@ public sealed class PresentationWorkspaceCoordinator(
     {
         string identifier = GetIdentifier(sessionId, deckId);
         await MaterializeAsync(sessionId, deckId, identifier, cancellationToken);
-        return await sessions.RenderAsync(identifier, path, cancellationToken);
+        BinaryData content = await sessions.ReadFileAsync(
+            identifier,
+            path,
+            cancellationToken);
+        string sha256BeforeRender = Hash(content);
+        PresentationRenderResult result =
+            await sessions.RenderAsync(identifier, path, cancellationToken);
+        if (result.ValidationPassed && result.Images.Count > 0)
+        {
+            BinaryData contentAfterRender = await sessions.ReadFileAsync(
+                identifier,
+                path,
+                cancellationToken);
+            string sha256AfterRender = Hash(contentAfterRender);
+            if (!string.Equals(
+                sha256BeforeRender,
+                sha256AfterRender,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "The presentation changed while it was being previewed. "
+                    + "Call pptx_preview again before publishing.");
+            }
+
+            await RecordPreviewAsync(
+                sessionId,
+                deckId,
+                path,
+                sha256AfterRender,
+                cancellationToken);
+        }
+
+        return result;
     }
 
     public async Task<ArtifactInfo> PublishAsync(
@@ -95,6 +128,12 @@ public sealed class PresentationWorkspaceCoordinator(
     {
         string identifier = GetIdentifier(sessionId, deckId);
         await MaterializeAsync(sessionId, deckId, identifier, cancellationToken);
+        BinaryData content = await sessions.ReadFileAsync(identifier, path, cancellationToken);
+        string sha256 = Hash(content);
+        PresentationQaState qaState =
+            await ReadQaStateAsync(sessionId, deckId, cancellationToken);
+        qaState.EnsureCanPublish(path, sha256);
+
         PresentationRenderResult validation =
             await sessions.RenderAsync(identifier, path, cancellationToken);
         if (!validation.ValidationPassed)
@@ -102,14 +141,15 @@ public sealed class PresentationWorkspaceCoordinator(
             throw new InvalidDataException("Presentation validation failed.");
         }
 
-        BinaryData content = await sessions.ReadFileAsync(identifier, path, cancellationToken);
-        return await artifacts.PutAsync(
+        ArtifactInfo artifact = await artifacts.PutAsync(
             sessionId,
             artifactId,
             Path.GetFileName(path),
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             content,
             cancellationToken);
+        await ClearQaStateAsync(sessionId, deckId, cancellationToken);
+        return artifact;
     }
 
     public string GetIdentifier(string sessionId, string deckId)
@@ -331,6 +371,75 @@ public sealed class PresentationWorkspaceCoordinator(
         ValidateDeckId(deckId);
         return $"{PresentationRoot}/{deckId}";
     }
+
+    private async Task RecordPreviewAsync(
+        string sessionId,
+        string deckId,
+        string path,
+        string sha256,
+        CancellationToken cancellationToken)
+    {
+        PresentationQaState qaState =
+            await ReadQaStateAsync(sessionId, deckId, cancellationToken);
+        qaState.RecordPreview(path, sha256, DateTimeOffset.UtcNow);
+        string artifactId = QaArtifactId(deckId);
+        await artifacts.DeleteAsync(sessionId, artifactId, cancellationToken);
+        await artifacts.PutAsync(
+            sessionId,
+            artifactId,
+            QaStateFileName,
+            "application/json",
+            BinaryData.FromObjectAsJson(qaState, JsonOptions),
+            cancellationToken);
+    }
+
+    private async Task<PresentationQaState> ReadQaStateAsync(
+        string sessionId,
+        string deckId,
+        CancellationToken cancellationToken)
+    {
+        ArtifactContent? stored = await artifacts.GetAsync(
+            sessionId,
+            QaArtifactId(deckId),
+            QaStateFileName,
+            cancellationToken);
+        if (stored is null)
+        {
+            return new PresentationQaState();
+        }
+
+        try
+        {
+            return stored.Content.ToObjectFromJson<PresentationQaState>(JsonOptions)
+                ?? new PresentationQaState();
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException(
+                $"Presentation QA state for '{deckId}' is not valid JSON.",
+                exception);
+        }
+    }
+
+    private async Task ClearQaStateAsync(
+        string sessionId,
+        string deckId,
+        CancellationToken cancellationToken)
+    {
+        await artifacts.DeleteAsync(
+            sessionId,
+            QaArtifactId(deckId),
+            cancellationToken);
+    }
+
+    private static string QaArtifactId(string deckId)
+    {
+        ValidateDeckId(deckId);
+        return $".qa-{deckId}";
+    }
+
+    private static string Hash(BinaryData content) =>
+        Convert.ToHexStringLower(SHA256.HashData(content.ToMemory().Span));
 
     private static void ValidateDeckId(string deckId)
     {
