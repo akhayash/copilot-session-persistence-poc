@@ -28,20 +28,19 @@ React + ASP.NET Core アプリケーションです。
 2つのmodeは排他的です。`Persistence:Backend`を起動時に一度だけ評価し、SQLite一式
 またはAzure Storage一式のどちらかだけをdependency injectionへ登録します。
 
-## Python／PowerPoint実行と3つのstorageの違い
+## Python／PowerPoint実行とstorageの違い
 
-Agentが生成したPython codeは、SessionFSやArtifactとは別のAzure Container Apps
-dynamic sessions（`PythonLTS`built-in container）で実行します。PowerPoint生成は
-review済みのSkillと`create_presentation` toolを使い、Python、LibreOffice、Noto CJK
-fontを組み込んだcustom container sessionへ構造化されたslide contentだけを渡します。
-3つの保存領域は役割が異なります。
+汎用Python codeはAzure Container Appsの`PythonLTS` built-in sessionで実行します。
+PowerPointは、review済みSkillと`pptx_run`／`pptx_files`／`pptx_preview`／
+`pptx_publish`を使い、Python、Node.js、PptxGenJS、LibreOfficeを組み込んだcustom
+container session内で複数回のscript／shell実行とrender確認を行います。
 
-| | SessionFS | Dynamic sessionのsandbox workspace | Artifact Blob |
+| | 内容 | 永続性 | 保存先 |
 | --- | --- | --- | --- |
-| 内容 | 会話とagent stateのvirtual file system | Python実行中だけ存在するephemeralなfile system | 完成したbinary成果物 |
-| 永続性 | Session削除まで永続 | Session poolのcooldown後に破棄。実行間で共有しない | Session削除まで永続 |
-| 保存先 | SQLite / Azure Blob Storage | Azure Container Apps dynamic session（Microsoft管理、非永続） | Azure Blob Storage |
-| Credential | Application managed identityが管理 | Sandbox containerにはStorage credentialを渡さない | Application managed identityが管理 |
+| SessionFS | 会話とagent state | Session削除まで | SQLite / Azure Blob Storage |
+| Python sandbox | 汎用Python実行中のfile | 実行終了後に破棄 | `PythonLTS` dynamic session |
+| Presentation workspace | source、script、PPTX | warm sessionでは再利用。回収後は復元 | Custom container cache＋内部Artifact Blob |
+| Artifact | 完成したbinary成果物 | Session削除まで | Azure Blob Storage |
 
 どちらのdynamic sessionもEgress無効（外部networkへ到達不可）です。Python codeの
 1回の実行はbuilt-in code interpreterの上限である最大220秒です。Data-plane APIは現時点で
@@ -50,12 +49,10 @@ fontを組み込んだcustom container sessionへ構造化されたslide content
 [Azure Container Apps deployment](infra/container-apps/README.md#python-dynamic-session-pool)
 を参照してください。Azure上でPPTX生成とArtifact downloadまでlive validation済みです。
 
-Chat利用者がDynamic Sessions、`execute_python`、Azure Storage、`/mnt/data`を指定する
-必要はありません。たとえば「この内容を日本語のPowerPoint 3枚にまとめ、download
-できるようにしてください」のように成果物だけを依頼します。Application側のsystem
-messageとPPTX Skillが実行方法をmodelへ指示します。`create_presentation` toolは
-PPTX、rendered PDF、slide PNG、validation manifestを生成し、画面のArtifacts欄へ
-表示します。`python`、`node`、`libreoffice`のようなcommand単位のtoolは公開しません。
+Chat利用者がtool名、Azure Storage、内部pathを指定する必要はありません。成果物だけを
+依頼すると、system messageとSkillが同じworkspaceでのsource作成、shell／Python／Node.js
+実行、preview、修正、再preview、publishをmodelへ指示します。旧`create_presentation`は
+互換用に残しますが、既定ではmodelへ公開しません。
 
 Azure Storage mode では、各 Web node が専用の headless GitHub Copilot CLI runtime
 に接続します。Web node と runtime は別プロセスの 1:1 pair です。共有するのは
@@ -239,6 +236,8 @@ dotnet test CopilotSessionPersistencePoc.slnx `
 - Owner-scoped Artifact Web APIとchat画面からのupload／download
 - Azure Container Apps dynamic sessions（`PythonLTS`）によるPython code実行と、Azure
   Table Storage `executionjobs` での実行ジョブ状態管理
+- Custom container sessionでのmulti-turn PowerPoint workspace、shell／Python／Node.js
+  実行、画像preview、修正gate、Artifact publish
 
 対象外:
 
@@ -246,16 +245,18 @@ dotnet test CopilotSessionPersistencePoc.slnx `
 - Production-grade fencing、multi-region scaling、backup、retention
 - SQL Server / Azure Cosmos DB implementation
 
-Python code実行のinfrastructureをAzureへdeploymentし、直接REST APIとchatからの
-PPTX生成、Artifact Blobへのpublish、download、conversation再表示までlive validation
-済みです。現在のdata-plane API version（`2025-10-02-preview`）はpreviewであり、
+Python／PowerPoint実行のinfrastructureをAzureへdeploymentし、複数回のscript／shell実行、
+PPTX生成、画像preview、修正、Artifact Blobへのpublish、browser download、Microsoft
+PowerPointでのopenまでlive validation済みです。現在のPython pool data-plane API version
+（`2025-10-02-preview`）はpreviewであり、
 将来変更される可能性があります。検証状況は [Validation](docs/validation.md) を
 参照してください。
 
 ## Security
 
 - `CopilotClientMode.Empty` と明示的なcustom tool allow-listを使用し、agentにhost
-  filesystem、network、汎用shell toolを公開しません。
+  filesystem、host shell、networkを公開しません。PowerPoint用shellはegress無効・非rootの
+  custom container workspace内だけで実行します。
 - Credential と connection token を browser、database、API payload、log に保存しません。
 - Azure Container Apps deployment では built-in authentication が Microsoft Entra ID
   sign-inを要求します。Local実行にはuser authenticationを適用しません。

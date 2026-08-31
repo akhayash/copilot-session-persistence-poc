@@ -184,7 +184,8 @@ commandやcredentialは持ちません。
 Modelへ公開する主経路は`custom:pptx_run`、`custom:pptx_files`、
 `custom:pptx_preview`、`custom:pptx_publish`です。同じ`deckId`からserver側で
 HMAC-SHA-256 identifierを導出し、turnをまたいで同じwarm custom container sessionへ
-routeします。旧`custom:create_presentation`は互換用fallbackとして残します。
+routeします。旧`custom:create_presentation`は互換用に実装を残しますが、既定ではmodelへ
+登録せず、明示的な互換設定があるdeploymentだけで公開します。
 
 ```text
 Natural-language request
@@ -215,7 +216,14 @@ owner-scoped Artifact Blobへcontent-addressedで保存し、SessionFSにはpath
 
 `pptx_preview`は縮小したslide PNGをGitHub Copilot SDKの
 `ToolResultObject.BinaryResultsForLlm`へ載せます。Skillは初回preview後に少なくとも1回の
-修正と再previewを必須とし、検証済みdeckだけを`pptx_publish`で公開します。
+修正と再previewを必須とします。applicationはZIP metadataを除外したcanonical member-content
+hashで変更を判定し、同一pathのpreviewが2回以上、内容変更済み、最終preview後に未確認変更なし、
+を`pptx_publish`で検証します。
+
+QA stateは`/internal/presentation-qa/{deckId}.json`へHMAC署名付きで保存します。modelが
+virtual filesystemから内容を変更・削除しても署名を偽造できず、検証はfail closedになります。
+publish Artifact IDはdeck IDとcanonical hashから決定的に作るため、response喪失後のretryでも
+既存Artifactを返せます。
 
 ### 5.8 Artifactのbrowser delivery
 

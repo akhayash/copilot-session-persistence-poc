@@ -222,8 +222,8 @@ JSON parseを再検証します。全fileをdownload・検証してからpublish
 identityは渡していません。
 
 2026-08-31にmulti-turn workspace版を実装し、workerの`exec`／`files`／`render` APIを
-18件のpytest、.NET client契約と`ToolBinaryResult(image/png)`構築をunit test、
-既存47件を含む53件の.NET test suiteで検証しました。Azure Container Appsへworker/Web/Skill
+19件のpytest、.NET client契約と`ToolBinaryResult(image/png)`構築をunit test、
+既存testを含む61件の.NET test suiteで検証しました。Azure Container Appsへworker/Web/Skill
 imageをdeploymentし、pool management endpoint経由でfile write、Python実行、PPTX生成、
 Open XML検証、slide PNG返却、render一時fileの非表示、file削除をlive確認しました。
 
@@ -263,6 +263,13 @@ integrity、Microsoft PowerPointでのopen、1600×900 PNG exportを確認しま
 一方、visual inspectionではconnectorがnodeやlabelを横切る箇所が残りました。QA gateは
 「変更して再previewした」ことを保証しますが、変更が十分に良いことまでは判定しません。
 この制約は [Backlog](backlog.md) のgeometry検査課題として継続します。
+
+全体コードレビューでは、whole-file SHA-256がZIP member timestampだけの差を修正と誤認する
+こと、内部Artifactのdelete-then-createによるQA state喪失、publish成功後のstate削除失敗で
+結果が曖昧になることを検出しました。対応としてcanonical member-content hash、HMAC署名付き
+SessionFS atomic state、content-addressed publish IDとpublished markerを導入しました。
+同一member contentでZIP timestampだけ異なるarchiveのhash一致、content変更時のhash差、
+publish済みcontentのretry認識をunit testへ追加しています。
 
 ## 9. Artifactのbrowser download
 

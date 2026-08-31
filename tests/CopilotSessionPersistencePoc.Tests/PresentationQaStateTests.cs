@@ -79,4 +79,21 @@ public sealed class PresentationQaStateTests
         Assert.Equal("bbb", state.FirstPreviewSha256);
         Assert.Contains("at least two successful previews", exception.Message);
     }
+
+    [Fact]
+    public void PublishedContentIsIdempotentlyRecognized()
+    {
+        var state = new PresentationQaState();
+        state.RecordPreview("deck.pptx", "aaa", PreviewedAt);
+        state.RecordPreview("deck.pptx", "bbb", PreviewedAt.AddMinutes(1));
+        state.MarkPublished("deck.pptx", "bbb", "pptx-deck-bbb", "deck.pptx");
+
+        Assert.True(state.IsPublished("deck.pptx", "BBB"));
+
+        state.RecordPreview("deck.pptx", "ccc", PreviewedAt.AddMinutes(2));
+
+        Assert.False(state.IsPublished("deck.pptx", "ccc"));
+        Assert.Equal(1, state.PreviewCount);
+        Assert.Equal("ccc", state.FirstPreviewSha256);
+    }
 }

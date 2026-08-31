@@ -84,6 +84,10 @@ builder.Services
         static options => !options.Enabled
             || options.PoolManagementEndpoint is { IsAbsoluteUri: true },
         "PresentationSessions:PoolManagementEndpoint must be absolute when enabled.")
+    .Validate(
+        static options => !options.Enabled
+            || !string.IsNullOrWhiteSpace(options.IdentifierKey),
+        "PresentationSessions:IdentifierKey is required when enabled.")
     .ValidateOnStart();
 bool enableDynamicSessions = builder.Configuration.GetValue<bool>(
     $"{DynamicSessionsOptions.SectionName}:Enabled");

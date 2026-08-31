@@ -98,29 +98,40 @@ public sealed class PresentationWorkspaceToolProvider(
                 CancellationToken cancellationToken) =>
             {
                 EnsureSession(invocation, sessionId);
-                PresentationRenderResult result = await coordinator.RenderAsync(
-                    sessionId,
-                    deckId,
-                    path,
-                    cancellationToken);
-                return new ToolResultAIContent(new ToolResultObject
+                try
                 {
-                    ResultType = "success",
-                    TextResultForLlm =
-                        $"Validated {result.SlideCount} slides. Inspect every returned image. "
-                        + "For the required correction cycle, regenerate this same path "
-                        + $"('{path}') in place, then preview this same path again.",
-                    BinaryResultsForLlm =
-                    [
-                        .. result.Images.Select(static image => new ToolBinaryResult
-                        {
-                            Type = ToolBinaryResultType.Image,
-                            MimeType = image.MimeType,
-                            Data = Convert.ToBase64String(image.Content.ToArray()),
-                            Description = $"Rendered slide {image.SlideNumber}",
-                        }),
-                    ],
-                });
+                    PresentationRenderResult result = await coordinator.RenderAsync(
+                        sessionId,
+                        deckId,
+                        path,
+                        cancellationToken);
+                    return new ToolResultAIContent(new ToolResultObject
+                    {
+                        ResultType = "success",
+                        TextResultForLlm =
+                            $"Validated {result.SlideCount} slides. Inspect every returned image. "
+                            + "For the required correction cycle, regenerate this same path "
+                            + $"('{path}') in place, then preview this same path again.",
+                        BinaryResultsForLlm =
+                        [
+                            .. result.Images.Select(static image => new ToolBinaryResult
+                            {
+                                Type = ToolBinaryResultType.Image,
+                                MimeType = image.MimeType,
+                                Data = Convert.ToBase64String(image.Content.ToArray()),
+                                Description = $"Rendered slide {image.SlideNumber}",
+                            }),
+                        ],
+                    });
+                }
+                catch (InvalidOperationException exception)
+                {
+                    return new ToolResultAIContent(new ToolResultObject
+                    {
+                        ResultType = "failure",
+                        TextResultForLlm = $"PREVIEW_REJECTED: {exception.Message}",
+                    });
+                }
             },
             ToolOptions,
             new AIFunctionFactoryOptions
@@ -146,7 +157,6 @@ public sealed class PresentationWorkspaceToolProvider(
                         await coordinator.PublishAsync(
                             sessionId,
                             deckId,
-                            invocation.ToolCallId,
                             path,
                             cancellationToken);
                     return new ToolResultAIContent(new ToolResultObject

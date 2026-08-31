@@ -14,7 +14,7 @@ public sealed class PresentationWorkspaceCoordinator(
     IOptions<PresentationSessionsOptions> options)
 {
     private const string PresentationRoot = "/presentation";
-    private const string QaStateFileName = "state.json";
+    private const string PresentationQaRoot = "/internal/presentation-qa";
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
     private readonly PresentationSessionsOptions settings = options.Value;
@@ -88,7 +88,7 @@ public sealed class PresentationWorkspaceCoordinator(
             identifier,
             path,
             cancellationToken);
-        string sha256BeforeRender = Hash(content);
+        string sha256BeforeRender = ComputeContentHash(content, path);
         PresentationRenderResult result =
             await sessions.RenderAsync(identifier, path, cancellationToken);
         if (result.ValidationPassed && result.Images.Count > 0)
@@ -97,7 +97,7 @@ public sealed class PresentationWorkspaceCoordinator(
                 identifier,
                 path,
                 cancellationToken);
-            string sha256AfterRender = Hash(contentAfterRender);
+            string sha256AfterRender = ComputeContentHash(contentAfterRender, path);
             if (!string.Equals(
                 sha256BeforeRender,
                 sha256AfterRender,
@@ -122,16 +122,28 @@ public sealed class PresentationWorkspaceCoordinator(
     public async Task<ArtifactInfo> PublishAsync(
         string sessionId,
         string deckId,
-        string artifactId,
         string path,
         CancellationToken cancellationToken)
     {
         string identifier = GetIdentifier(sessionId, deckId);
         await MaterializeAsync(sessionId, deckId, identifier, cancellationToken);
         BinaryData content = await sessions.ReadFileAsync(identifier, path, cancellationToken);
-        string sha256 = Hash(content);
+        string sha256 = ComputeContentHash(content, path);
         PresentationQaState qaState =
             await ReadQaStateAsync(sessionId, deckId, cancellationToken);
+        if (qaState.IsPublished(path, sha256))
+        {
+            ArtifactContent? existing = await artifacts.GetAsync(
+                sessionId,
+                qaState.PublishedArtifactId!,
+                qaState.PublishedFileName!,
+                cancellationToken);
+            if (existing is not null)
+            {
+                return existing.Info;
+            }
+        }
+
         qaState.EnsureCanPublish(path, sha256);
 
         PresentationRenderResult validation =
@@ -141,15 +153,39 @@ public sealed class PresentationWorkspaceCoordinator(
             throw new InvalidDataException("Presentation validation failed.");
         }
 
-        ArtifactInfo artifact = await artifacts.PutAsync(
+        BinaryData validatedContent = await sessions.ReadFileAsync(
+            identifier,
+            path,
+            cancellationToken);
+        string validatedSha256 = ComputeContentHash(validatedContent, path);
+        if (!string.Equals(sha256, validatedSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "The presentation changed while it was being validated for publishing. "
+                + "Call pptx_preview again before publishing.");
+        }
+
+        string fileName = Path.GetFileName(path);
+        string artifactId = $"pptx-{deckId}-{sha256[..16]}";
+        await MutateQaStateAsync(
+            sessionId,
+            deckId,
+            current =>
+            {
+                if (!current.IsPublished(path, sha256))
+                {
+                    current.EnsureCanPublish(path, sha256);
+                    current.MarkPublished(path, sha256, artifactId, fileName);
+                }
+            },
+            cancellationToken);
+        return await artifacts.PutAsync(
             sessionId,
             artifactId,
-            Path.GetFileName(path),
+            fileName,
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            content,
+            validatedContent,
             cancellationToken);
-        await ClearQaStateAsync(sessionId, deckId, cancellationToken);
-        return artifact;
     }
 
     public string GetIdentifier(string sessionId, string deckId)
@@ -379,17 +415,10 @@ public sealed class PresentationWorkspaceCoordinator(
         string sha256,
         CancellationToken cancellationToken)
     {
-        PresentationQaState qaState =
-            await ReadQaStateAsync(sessionId, deckId, cancellationToken);
-        qaState.RecordPreview(path, sha256, DateTimeOffset.UtcNow);
-        string artifactId = QaArtifactId(deckId);
-        await artifacts.DeleteAsync(sessionId, artifactId, cancellationToken);
-        await artifacts.PutAsync(
+        await MutateQaStateAsync(
             sessionId,
-            artifactId,
-            QaStateFileName,
-            "application/json",
-            BinaryData.FromObjectAsJson(qaState, JsonOptions),
+            deckId,
+            state => state.RecordPreview(path, sha256, DateTimeOffset.UtcNow),
             cancellationToken);
     }
 
@@ -398,48 +427,144 @@ public sealed class PresentationWorkspaceCoordinator(
         string deckId,
         CancellationToken cancellationToken)
     {
-        ArtifactContent? stored = await artifacts.GetAsync(
+        AzureSessionFsState state = await sessionFs.ReadAsync(sessionId, cancellationToken);
+        return DeserializeQaState(state, sessionId, deckId);
+    }
+
+    private async Task MutateQaStateAsync(
+        string sessionId,
+        string deckId,
+        Action<PresentationQaState> mutation,
+        CancellationToken cancellationToken)
+    {
+        string path = QaStatePath(deckId);
+        await sessionFs.MutateAsync(
             sessionId,
-            QaArtifactId(deckId),
-            QaStateFileName,
+            state =>
+            {
+                PresentationQaState qaState =
+                    DeserializeQaState(state, sessionId, deckId);
+                mutation(qaState);
+                string signature = SignQaState(sessionId, deckId, qaState);
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+                EnsureDirectory(state, "/internal", now);
+                EnsureDirectory(state, PresentationQaRoot, now);
+                state.Nodes[path] = new AzureSessionFsNode
+                {
+                    Kind = "file",
+                    Content = JsonSerializer.Serialize(
+                        new QaStateEnvelope(qaState, signature),
+                        JsonOptions),
+                    Birthtime = state.Nodes.TryGetValue(path, out AzureSessionFsNode? existing)
+                        ? existing.Birthtime
+                        : now,
+                    Mtime = now,
+                    Version = (existing?.Version ?? 0) + 1,
+                };
+            },
             cancellationToken);
-        if (stored is null)
+    }
+
+    private PresentationQaState DeserializeQaState(
+        AzureSessionFsState state,
+        string sessionId,
+        string deckId)
+    {
+        string path = QaStatePath(deckId);
+        if (!state.Nodes.TryGetValue(path, out AzureSessionFsNode? node)
+            || node.Kind != "file"
+            || node.Content is null)
         {
             return new PresentationQaState();
         }
 
         try
         {
-            return stored.Content.ToObjectFromJson<PresentationQaState>(JsonOptions)
-                ?? new PresentationQaState();
+            QaStateEnvelope? envelope =
+                JsonSerializer.Deserialize<QaStateEnvelope>(node.Content, JsonOptions);
+            if (envelope is null
+                || !VerifyQaSignature(sessionId, deckId, envelope.State, envelope.Signature))
+            {
+                return new PresentationQaState();
+            }
+
+            return envelope.State;
         }
-        catch (JsonException exception)
+        catch (JsonException)
         {
-            throw new InvalidDataException(
-                $"Presentation QA state for '{deckId}' is not valid JSON.",
+            return new PresentationQaState();
+        }
+    }
+
+    private static string QaStatePath(string deckId)
+    {
+        ValidateDeckId(deckId);
+        return $"{PresentationQaRoot}/{deckId}.json";
+    }
+
+    private string SignQaState(
+        string sessionId,
+        string deckId,
+        PresentationQaState qaState)
+    {
+        byte[] payload = QaSignaturePayload(sessionId, deckId, qaState);
+        return Convert.ToHexStringLower(
+            HMACSHA256.HashData(GetQaSigningKey(), payload));
+    }
+
+    private bool VerifyQaSignature(
+        string sessionId,
+        string deckId,
+        PresentationQaState qaState,
+        string signature)
+    {
+        byte[] expected = HMACSHA256.HashData(
+            GetQaSigningKey(),
+            QaSignaturePayload(sessionId, deckId, qaState));
+        try
+        {
+            byte[] actual = Convert.FromHexString(signature);
+            return CryptographicOperations.FixedTimeEquals(expected, actual);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private byte[] GetQaSigningKey()
+    {
+        if (string.IsNullOrWhiteSpace(settings.IdentifierKey))
+        {
+            throw new InvalidOperationException(
+                "PresentationSessions:IdentifierKey is required for signed QA state.");
+        }
+
+        return Encoding.UTF8.GetBytes(settings.IdentifierKey);
+    }
+
+    private static byte[] QaSignaturePayload(
+        string sessionId,
+        string deckId,
+        PresentationQaState qaState) =>
+        Encoding.UTF8.GetBytes(
+            $"{sessionId}\n{deckId}\n"
+            + JsonSerializer.Serialize(qaState, JsonOptions));
+
+    private static string ComputeContentHash(BinaryData content, string path)
+    {
+        try
+        {
+            return PresentationContentHasher.Compute(content);
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new InvalidOperationException(
+                $"'{path}' is not a valid PPTX Open XML package. "
+                + "Regenerate it and call pptx_preview again.",
                 exception);
         }
     }
-
-    private async Task ClearQaStateAsync(
-        string sessionId,
-        string deckId,
-        CancellationToken cancellationToken)
-    {
-        await artifacts.DeleteAsync(
-            sessionId,
-            QaArtifactId(deckId),
-            cancellationToken);
-    }
-
-    private static string QaArtifactId(string deckId)
-    {
-        ValidateDeckId(deckId);
-        return $".qa-{deckId}";
-    }
-
-    private static string Hash(BinaryData content) =>
-        Convert.ToHexStringLower(SHA256.HashData(content.ToMemory().Span));
 
     private static void ValidateDeckId(string deckId)
     {
@@ -491,4 +616,8 @@ public sealed class PresentationWorkspaceCoordinator(
         string FileName,
         string Sha256,
         long SizeBytes);
+
+    private sealed record QaStateEnvelope(
+        PresentationQaState State,
+        string Signature);
 }

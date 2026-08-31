@@ -40,16 +40,19 @@ Skill は custom presentation pool だけを使うため、PowerPoint workflow �
 slideがそのままpublishされました。Skillとsystem promptが要求する「preview後に最低1回修正し、
 再previewする」は、modelへの文章指示だけでは保証できません。
 
-`pptx_publish`側で、対象PPTXについて次の状態をSessionFSの
-modelから参照・変更できない内部Artifact `.qa-{deckId}/state.json` へ保持し、条件未達なら
-publishを拒否するgateを実装しました。
+`pptx_publish`側で、対象PPTXについて次の状態を署名付きSessionFS node
+`/internal/presentation-qa/{deckId}.json`へatomicに保持し、条件未達ならpublishを拒否する
+gateを実装しました。modelがnodeを変更しても署名検証に失敗し、状態なしとしてfail closedに
+なります。
 
 1. 初回preview時のPPTX hash
 2. 初回preview後にPPTX hashが変化したこと
 3. 変更後のhashに対して再previewが成功したこと
 4. publish対象のhashが最終preview時と一致すること
 
-publish成功後はQA stateを削除し、次の改訂でも新しいfix-and-verify cycleを要求します。
+PPTXの変更判定はZIP timestampを無視するcanonical member-content hashを使います。publishは
+deck IDとhashから決定したArtifact IDを使い、response喪失後のretryでも既存Artifactを返します。
+publish後に別内容をpreviewすると新しいfix-and-verify cycleを開始します。
 これは見た目の良さ自体を完全には判定しませんが、少なくともfix-and-verify loopをTool
 contractとして強制します。
 
@@ -145,8 +148,8 @@ Artifact uploadは`SessionEndpoints`の`MaxArtifactUploadBytes`で10 MiB、worke
 
 ## Appendix. Multi-turn Skill実行のsandbox設計方針
 
-課題1に着手する際、shellとPython実行をscopeへ入れる場合の設計方針をまとめます。以下は
-Container Appsのplatform制約を踏まえた結論であり、実装前の判断材料です。
+課題1の実装時に採用した、shellとPython実行をscopeへ入れる場合の設計方針をまとめます。以下は
+Container Appsのplatform制約を踏まえた結論と実装理由です。
 
 ### 前提となるplatform制約
 
