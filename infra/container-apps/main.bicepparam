@@ -15,7 +15,9 @@ param presentationWorkerImage = readEnvironmentVariable('PRESENTATION_WORKER_IMA
 param minReplicas = 0
 param maxReplicas = 2
 param deployWebApp = true
-param enablePresentationSessions = true
+// Keep the cost-bearing custom presentation pool off by default.
+// Override with `--parameters enablePresentationSessions=true` when restoring it.
+param enablePresentationSessions = false
 param presentationReadySessionInstances = 1
 
 param sessionPoolCooldownPeriodInSeconds = 300

@@ -301,3 +301,26 @@ Object URLはdownload確定前に失効させません。
 
 なお検証中にbrowser automationが記録したGUID名のfileは、automation側がdownloadを
 横取りして一時保存した際の名前であり、application側の挙動ではありません。
+
+## 10. Cost suspension and recovery readiness
+
+presentation機能の検証後、常時ready 1が必要なcustom presentation poolを明示削除しました。
+削除前にWeb環境変数`PresentationSessions__Enabled=false`を反映したrevisionを作成し、Web appも
+管理REST APIで停止しました。
+
+### Result
+
+| 確認項目 | 結果 |
+| --- | --- |
+| Web running status | `Stopped` |
+| Web minimum replicas | `0` |
+| Presentation custom pool | 削除済み |
+| PythonLTS pool | ready instance未指定（既定0） |
+| SessionFS／Artifact Storage | 保持 |
+| Container images | ACRに保持 |
+
+`main.bicepparam`はpresentation機能を既定falseとしました。復旧時は必要なimageとsecretの
+environment variableを設定し、`enablePresentationSessions=true`をoverrideしてBicepを
+deploymentすると、同じ決定的resource名でpool、RBAC、Web設定を再作成できます。
+停止・復旧のコマンドは
+[Container Apps deployment guide](../infra/container-apps/README.md)に記録しています。

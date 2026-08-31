@@ -159,6 +159,75 @@ platform制約により`readySessionInstances`が1以上必要です。利用が
 worker 1台分のidle compute costが継続するため、この環境全体が完全な0 nodeになるのは
 `enablePresentationSessions=false`のときだけです。
 
+## Suspend and restore the cost-bearing presentation environment
+
+Custom presentation poolは`readySessionInstances >= 1`が必須のため、未使用時もcompute費用が
+発生します。`main.bicepparam`は誤って再作成しないよう
+`enablePresentationSessions=false`を既定にしています。
+
+### Suspend
+
+Webのpresentation Toolを無効化してからWeb appを停止し、custom session poolを削除します。
+Python poolはready 0のため削除不要です。Artifact、SessionFS、ACR imageは保持されます。
+
+```powershell
+az containerapp update `
+  --name ca-sessionfs-dev-web `
+  --resource-group rg-copilot-sdk-agent `
+  --container-name web `
+  --set-env-vars PresentationSessions__Enabled=false
+
+$webId = az containerapp show `
+  --name ca-sessionfs-dev-web `
+  --resource-group rg-copilot-sdk-agent `
+  --query id `
+  --output tsv
+
+az rest `
+  --method post `
+  --url "${webId}/stop?api-version=2025-01-01"
+
+az resource delete `
+  --resource-group rg-copilot-sdk-agent `
+  --name <presentation-session-pool-name> `
+  --resource-type Microsoft.App/sessionPools `
+  --api-version 2025-07-01
+```
+
+停止後もAzure Storage、Azure Container Registry、Private Endpoint等の少額な保有費用は
+残ります。presentation workerとWebのcomputeは停止します。
+
+### Restore
+
+Build済みimage tagと通常のsecret／authentication parameterを設定し、Bicep deploymentで
+pool、pool-scoped RBAC、Web設定を再作成します。その後Web appを開始します。
+
+```powershell
+$env:SESSIONFS_WEB_IMAGE = '<registry>.azurecr.io/sessionfs-web:<tag>'
+$env:COPILOT_CLI_IMAGE = '<registry>.azurecr.io/copilot-cli:<tag>'
+$env:PRESENTATION_WORKER_IMAGE = '<registry>.azurecr.io/presentation-worker:<tag>'
+# Set the remaining variables listed in "Validate and deploy".
+
+az deployment group create `
+  --resource-group <resource-group> `
+  --template-file infra\container-apps\main.bicep `
+  --parameters infra\container-apps\main.bicepparam `
+  --parameters enablePresentationSessions=true
+
+$webId = az containerapp show `
+  --name <web-app-name> `
+  --resource-group <resource-group> `
+  --query id `
+  --output tsv
+
+az rest `
+  --method post `
+  --url "${webId}/start?api-version=2025-01-01"
+```
+
+通常の停止状態へ戻す場合、Bicepを`enablePresentationSessions=false`で再deploymentするだけでは
+incremental deploymentの既存poolは削除されません。上記Suspend手順でpoolを明示的に削除します。
+
 継続して発生する費用:
 
 - Blob/Table用Azure Private Endpoint 2個

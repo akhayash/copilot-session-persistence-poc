@@ -144,6 +144,10 @@ Web app と Python pool は 0 になりますが、**環境全体が 0 node に�
 無効化する運用が妥当です。作業session自体は`Timed` lifecycleによりidle 300秒で自動削除し、
 最大同時session数は1に制限します。
 
+検証環境は通常停止状態とし、`main.bicepparam`ではpresentation機能を既定falseにします。
+検証終了後はWeb appを停止してcustom poolを削除します。復旧時はBicep parameterをtrueへ
+overrideし、pool、RBAC、Web設定を再作成します。Storage dataとACR imageは停止中も保持します。
+
 ---
 
 ## D-07 実行基盤は Container Apps を継続する

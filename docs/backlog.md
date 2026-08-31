@@ -62,7 +62,7 @@ contractとして強制します。
 
 **State**: Open / **Impact**: 中 / **Scope**: `infra`、deployment手順
 
-稼働中のweb imageは`sessionfs-web:multi-turn-pptx-v5`、presentation workerは
+停止前に検証したweb imageは`sessionfs-web:multi-turn-pptx-v5`、presentation workerは
 `presentation-worker:multi-turn-v4`、Copilot CLI sidecarは
 `copilot-cli:multi-turn-pptx-v5`です。Bicep parameterはenvironment variableを参照するため、
 次回`az deployment group create`でも`SESSIONFS_WEB_IMAGE`、
@@ -95,17 +95,18 @@ publish gateへ組み込みます。
 
 ## 5. Presentation poolのidle cost
 
-**State**: Accepted / **Impact**: 中 / **Scope**: `infra`
+**State**: Resolved operationally / **Impact**: 中 / **Scope**: `infra`
 
 Web appは`minReplicas: 0`、Python poolは`readySessionInstances: 0`でscale-to-zeroします。
 一方、custom container poolはplatform制約により`readySessionInstances`が1以上必須で、
 利用が無くても1 vCPU／2 GiBのworker 1台分が常時課金されます。環境全体が完全な0 nodeに
 なるのは`enablePresentationSessions=false`のときだけです。
 
-これはplatformの制約であり回避できません。コストを止める唯一の手段はfeatureごと無効化する
-ことなので、常用しない環境では`enablePresentationSessions=false`を既定にする運用が妥当
-です。詳細は [infra/container-apps/README](../infra/container-apps/README.md) を参照して
-ください。
+これはplatformの制約であり、poolを残したまま回避できません。そのため
+`main.bicepparam`は`enablePresentationSessions=false`を既定とし、検証終了時はWeb appを停止、
+custom poolを削除します。Bicepへ`enablePresentationSessions=true`をoverrideすればpoolとRBACを
+再作成できます。詳細は [infra/container-apps/README](../infra/container-apps/README.md) を
+参照してください。
 
 ---
 
