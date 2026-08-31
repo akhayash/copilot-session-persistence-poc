@@ -19,8 +19,8 @@ them to name tools, paths, Dynamic Sessions, containers, or storage.
 - The sandbox has Python, python-pptx, Node.js, PptxGenJS, LibreOffice, Poppler, Pillow,
   PyMuPDF, and Noto CJK fonts preinstalled. Do not run `pip`, `npm install`, `apt`, `curl`,
   or any network command.
-- `custom:create_presentation` is a legacy deterministic fallback. Use it only when the
-  workspace tools are unavailable.
+- Never use `custom:create_presentation` for new work. It is an opt-in compatibility tool
+  for deployments that explicitly enable the legacy path.
 - Do not claim that a presentation was created without a successful publish result.
 
 ## Content and story

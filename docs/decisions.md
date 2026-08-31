@@ -68,7 +68,8 @@ flowchart LR
 
 **決定**  新しい PowerPoint 生成は `pptx_run` / `pptx_files` / `pptx_preview` /
 `pptx_publish` を使います。`create_presentation` と `POST /presentations` は既存利用との
-互換性のため legacy fallback として残します。
+互換性のため実装を残しますが、`create_presentation`は既定でmodelへ公開しません。
+必要なdeploymentだけ`PresentationSessions:EnableLegacyCreateTool=true`で明示的に有効化します。
 
 **理由**  固定 API では、render 結果を見た修正や既存 deck の再編集ができませんでした。
 workspace API では custom container 内で shell / Python / Node.js を実行し、同じ deck ID を
@@ -77,7 +78,8 @@ image の種別ではなく API と状態管理です。
 
 **代償**  model 生成 code の実行面が広がります。`EgressDisabled`、非 root、resource 上限、
 application 仲介の file 転送を維持し、sandbox へ Azure identity や storage credential を
-渡しません。
+渡しません。また、workspace Toolの選択は保証できても、視覚QAの修正品質はmodel依存です。
+publish前のfix-and-verifyを機械的に強制するgateは未実装です。
 
 ---
 

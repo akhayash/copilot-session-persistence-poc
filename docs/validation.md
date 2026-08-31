@@ -226,8 +226,24 @@ identityは渡していません。
 既存47件を含む53件の.NET test suiteで検証しました。Azure Container Appsへworker/Web/Skill
 imageをdeploymentし、pool management endpoint経由でfile write、Python実行、PPTX生成、
 Open XML検証、slide PNG返却、render一時fileの非表示、file削除をlive確認しました。
-実modelが画像を認識するWeb UI E2Eは、PlaywrightのMicrosoft Entra sign-inがaccount pickerへ
-戻るため未完了です。
+
+2026-08-31の最初のWeb UI E2Eでは、system promptがlegacy
+`create_presentation`を優先していたため、1枚指定に対してtitle slideを含む2枚が生成されました。
+`EnableLegacyCreateTool`を既定falseとしてlegacy Toolを非公開にし、system promptとSkillを
+workspace Tool必須へ修正しました。再deployment後の新規sessionでは次を確認しました。
+
+| 確認項目 | 結果 |
+| --- | --- |
+| Tool選択 | `create_presentation` 0回、`pptx_run` → `pptx_preview`を確認 |
+| SessionFS | `/presentation/azure-architecture-deck/azure_solution.pptx`を確認 |
+| browser download | `azure_solution.pptx`、29,616 bytes |
+| PPTX package | Open XML正常、slide 1枚 |
+| 日本語表示 | PowerPoint renderで正常 |
+| 図の品質 | 不合格。複数の矢印labelが重なったままpublishされた |
+
+これによりworkspace経路と画像返却の実model invocationは確認できましたが、prompt／Skillの
+指示だけではfix-and-verify loopを保証できないことも判明しました。publish前の再修正・
+再previewをTool側で強制する課題は [Backlog](backlog.md) に記録します。
 
 ## 9. Artifactのbrowser download
 

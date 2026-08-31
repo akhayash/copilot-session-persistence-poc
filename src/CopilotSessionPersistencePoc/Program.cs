@@ -89,6 +89,8 @@ bool enableDynamicSessions = builder.Configuration.GetValue<bool>(
     $"{DynamicSessionsOptions.SectionName}:Enabled");
 bool enablePresentationSessions = builder.Configuration.GetValue<bool>(
     $"{PresentationSessionsOptions.SectionName}:Enabled");
+bool enableLegacyPresentationTool = builder.Configuration.GetValue<bool>(
+    $"{PresentationSessionsOptions.SectionName}:EnableLegacyCreateTool");
 if (enableDynamicSessions && !useAzureStorage)
 {
     throw new InvalidOperationException(
@@ -124,8 +126,11 @@ if (useAzureStorage)
         builder.Services.AddHttpClient<
             IPresentationSessionsClient,
             AzurePresentationSessionsClient>();
-        builder.Services.AddScoped<PresentationExecutionCoordinator>();
-        builder.Services.AddScoped<ICopilotToolProvider, PresentationToolProvider>();
+        if (enableLegacyPresentationTool)
+        {
+            builder.Services.AddScoped<PresentationExecutionCoordinator>();
+            builder.Services.AddScoped<ICopilotToolProvider, PresentationToolProvider>();
+        }
         builder.Services.AddScoped<PresentationWorkspaceCoordinator>();
         builder.Services.AddScoped<ICopilotToolProvider, PresentationWorkspaceToolProvider>();
     }

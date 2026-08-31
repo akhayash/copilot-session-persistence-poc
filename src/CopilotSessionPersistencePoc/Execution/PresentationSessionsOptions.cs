@@ -8,6 +8,8 @@ public sealed class PresentationSessionsOptions
 
     public bool Enabled { get; init; }
 
+    public bool EnableLegacyCreateTool { get; init; }
+
     public Uri? PoolManagementEndpoint { get; init; }
 
     [Required]

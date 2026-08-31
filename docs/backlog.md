@@ -27,17 +27,39 @@ materialize / commit で sandbox 回収後も復元します。`pptx_preview` �
 
 Python dynamic session pool は既存の汎用 `execute_python` 用に温存しました。presentation
 Skill は custom presentation pool だけを使うため、PowerPoint workflow 内の能力分断は解消
-しています。旧 `create_presentation` は後方互換用に残しています。
+しています。旧 `create_presentation` は後方互換用に実装を残しますが、
+`PresentationSessions:EnableLegacyCreateTool`の明示設定がない限りmodelへ公開しません。
 
 ---
 
-## 2. Bicepと稼働imageのドリフト
+## 2. PowerPoint visual QA gate
+
+**State**: Open / **Impact**: 大 / **Scope**: `Execution`、`SessionFS`、`tests`
+
+実modelによるWeb UI E2Eで、`pptx_run`と`pptx_preview`は呼ばれましたが、矢印labelが重なった
+slideがそのままpublishされました。Skillとsystem promptが要求する「preview後に最低1回修正し、
+再previewする」は、modelへの文章指示だけでは保証できません。
+
+`pptx_publish`側で、対象PPTXについて次の状態をSessionFSへ保持し、条件未達ならpublishを
+拒否するgateを実装します。
+
+1. 初回preview時のPPTX hash
+2. 初回preview後にPPTX hashが変化したこと
+3. 変更後のhashに対して再previewが成功したこと
+4. publish対象のhashが最終preview時と一致すること
+
+これは見た目の良さ自体を完全には判定しませんが、少なくともfix-and-verify loopをTool contract
+として強制できます。
+
+---
+
+## 3. Bicepと稼働imageのドリフト
 
 **State**: Open / **Impact**: 中 / **Scope**: `infra`、deployment手順
 
-稼働中のweb imageは`sessionfs-web:multi-turn-pptx-v2`、presentation workerは
+稼働中のweb imageは`sessionfs-web:multi-turn-pptx-v3`、presentation workerは
 `presentation-worker:multi-turn-v3`、Copilot CLI sidecarは
-`copilot-cli:multi-turn-pptx-v1`です。Bicep parameterはenvironment variableを参照するため、
+`copilot-cli:multi-turn-pptx-v2`です。Bicep parameterはenvironment variableを参照するため、
 次回`az deployment group create`でも`SESSIONFS_WEB_IMAGE`、
 `PRESENTATION_WORKER_IMAGE`、`COPILOT_CLI_IMAGE`へこの組み合わせを指定する必要があります。
 
@@ -46,7 +68,7 @@ Skill は custom presentation pool だけを使うため、PowerPoint workflow �
 
 ---
 
-## 3. Presentation poolのidle cost
+## 4. Presentation poolのidle cost
 
 **State**: Accepted / **Impact**: 中 / **Scope**: `infra`
 
@@ -62,7 +84,7 @@ Web appは`minReplicas: 0`、Python poolは`readySessionInstances: 0`でscale-to
 
 ---
 
-## 4. pytestのsecurity alert
+## 5. pytestのsecurity alert
 
 **State**: Resolved / **Impact**: 小 / **Scope**: `presentation-worker/requirements*.txt`
 
@@ -75,7 +97,7 @@ runtime用`requirements.txt`だけをinstallし、testsもcopyしません。
 
 ---
 
-## 5. Artifactのサイズ上限と保持方針
+## 6. Artifactのサイズ上限と保持方針
 
 **State**: Open / **Impact**: 小（課題1に着手する場合は中） / **Scope**: `Api`、`ArtifactStorage`
 
@@ -86,7 +108,7 @@ Artifact uploadは`SessionEndpoints`の`MaxArtifactUploadBytes`で10 MiB、worke
 
 ---
 
-## 6. 既存の制約
+## 7. 既存の制約
 
 以下はPoCのscope外として意図的に扱っていない項目です。詳細は
 [Architecture](architecture.md) の「11. 現在の制約」を参照してください。

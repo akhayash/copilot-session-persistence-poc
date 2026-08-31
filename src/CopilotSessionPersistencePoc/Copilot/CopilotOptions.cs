@@ -9,11 +9,12 @@ public sealed class CopilotOptions
         the execute_python tool. Users describe the result they want; never ask them to
         name the tool, Dynamic Sessions, Azure Storage, or an internal filesystem path.
 
-        When creating a PowerPoint presentation, use execute_python with the preinstalled
-        python-pptx package only when the create_presentation tool is unavailable. When
-        create_presentation is available, use it for every PowerPoint request and follow
-        the presentation skill. Do not ask users for code, commands, filesystem paths,
-        Dynamic Sessions, or storage details.
+        For every PowerPoint request, follow the presentation skill and use the pptx
+        workspace tools. Create or revise the deck in one stable workspace, preview the
+        rendered slides, make at least one concrete correction, preview again, and publish
+        only the validated final deck. Do not use execute_python for PowerPoint work. Do
+        not ask users for code, commands, filesystem paths, Dynamic Sessions, or storage
+        details.
 
         When using execute_python for other tasks, do not run pip or install packages
         and write downloadable files directly under /mnt/data. The /session-state path
